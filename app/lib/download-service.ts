@@ -22,12 +22,16 @@ export class DownloadService {
       const validatedUrl = urlSchema.parse(url);
       console.log(`✅ URL validation passed: ${validatedUrl}`);
 
-      // If videoId exists, check for existing download first
+      // If videoId exists, check for existing download with matching start/end times
       if (videoInfo?.id) {
-        const existing = await this.getDownloadByVideoId(videoInfo.id);
+        const existing = await this.getDownloadByVideoIdAndTimes(
+          videoInfo.id,
+          startTime ?? null,
+          endTime ?? null
+        );
         if (existing) {
           console.log(
-            `✅ Found existing download for video ID ${videoInfo.id}, returning existing download`
+            `✅ Found existing download for video ID ${videoInfo.id} with matching times, returning existing download`
           );
           return existing;
         }
@@ -51,21 +55,6 @@ export class DownloadService {
       console.log(`✅ Download created with ID: ${download.id}`);
       return download;
     } catch (error: any) {
-      // Handle unique constraint error on videoId
-      if (
-        error?.code === "P2002" &&
-        error?.meta?.target?.includes("video_id")
-      ) {
-        console.log(
-          `⚠️ Download with video ID ${videoInfo?.id} already exists, fetching existing...`
-        );
-        if (videoInfo?.id) {
-          const existing = await this.getDownloadByVideoId(videoInfo.id);
-          if (existing) {
-            return existing;
-          }
-        }
-      }
       console.error(`💥 Error creating download for URL ${url}:`, error);
       throw error;
     }
@@ -149,8 +138,9 @@ export class DownloadService {
     console.log(`🔍 Looking up download by video ID: ${videoId}`);
 
     try {
-      const download = await prisma.download.findUnique({
+      const download = await prisma.download.findFirst({
         where: { videoId },
+        orderBy: { createdAt: "desc" },
       });
 
       if (download) {
@@ -167,6 +157,47 @@ export class DownloadService {
     } catch (error) {
       console.error(
         `💥 Error looking up download by video ID ${videoId}:`,
+        error
+      );
+      throw error;
+    }
+  }
+
+  static async getDownloadByVideoIdAndTimes(
+    videoId: string,
+    startTime: number | null,
+    endTime: number | null
+  ): Promise<Download | null> {
+    console.log(
+      `🔍 Looking up download by video ID ${videoId} with startTime=${startTime}, endTime=${endTime}`
+    );
+
+    try {
+      const download = await prisma.download.findFirst({
+        where: {
+          videoId,
+          startTime: startTime ?? null,
+          endTime: endTime ?? null,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (download) {
+        console.log(
+          `✅ Found download for video ID ${videoId} with matching times: ${
+            download.title || "Untitled"
+          }`
+        );
+      } else {
+        console.log(
+          `❌ No download found for video ID ${videoId} with matching times`
+        );
+      }
+
+      return download;
+    } catch (error) {
+      console.error(
+        `💥 Error looking up download by video ID and times:`,
         error
       );
       throw error;

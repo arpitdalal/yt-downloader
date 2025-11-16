@@ -58,20 +58,6 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   try {
-    // Check if video already exists
-    console.log(`🔍 Checking for existing download...`);
-    const existingDownload = await DownloadService.getDownloadByUrl(url);
-    if (existingDownload && existingDownload.status === "COMPLETED") {
-      console.log(
-        `✅ Found existing completed download: ID ${existingDownload.id}`
-      );
-      return {
-        success: true,
-        message: "Video already downloaded",
-        existing_download: existingDownload,
-      };
-    }
-
     // Extract video info first using Python script directly
     console.log(`🔍 Extracting video information...`);
     const videoInfo = await extractVideoInfo(url);
@@ -83,14 +69,16 @@ export async function action({ request }: ActionFunctionArgs) {
 
     console.log(`✅ Video info extracted: ${videoInfo.title}`);
 
-    // Check if download with this videoId already exists
+    // Check if download with this videoId and start/end times already exists
     if (videoInfo.id) {
-      const existingByVideoId = await DownloadService.getDownloadByVideoId(
-        videoInfo.id
+      const existingByVideoId = await DownloadService.getDownloadByVideoIdAndTimes(
+        videoInfo.id,
+        startTime,
+        endTime
       );
       if (existingByVideoId) {
         console.log(
-          `✅ Found existing download for video ID ${videoInfo.id}: ID ${existingByVideoId.id}`
+          `✅ Found existing download for video ID ${videoInfo.id} with matching times: ID ${existingByVideoId.id}`
         );
         // If it's completed, return it
         if (existingByVideoId.status === "COMPLETED") {
@@ -422,19 +410,48 @@ function DownloadItem({ download }: { download: Download }) {
     return `${mb.toFixed(1)} MB`;
   };
 
+  const formatTime = (seconds: number | null) => {
+    if (seconds === null) return null;
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const isCut = download.startTime !== null || download.endTime !== null;
+  const timeRange = isCut
+    ? `${formatTime(download.startTime) || "0:00"} - ${formatTime(download.endTime) || "end"}`
+    : null;
+
   return (
     <div className="border border-gray-200 rounded-lg p-4">
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <h3 className="font-medium text-gray-900 mb-1">
-            {download.title || "Untitled Video"}
-          </h3>
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="font-medium text-gray-900">
+              {download.title || "Untitled Video"}
+            </h3>
+            {isCut && (
+              <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
+                ✂️ Cut
+              </span>
+            )}
+          </div>
           <p className="text-sm text-gray-600 mb-2">{download.url}</p>
 
           <div className="flex items-center space-x-4 text-sm text-gray-500">
             <span>ID: {download.videoId || "Unknown"}</span>
             {download.fileSize && (
               <span>Size: {formatFileSize(download.fileSize)}</span>
+            )}
+            {timeRange && (
+              <span className="text-purple-600 font-medium">
+                Time: {timeRange}
+              </span>
             )}
             <span>
               Created: {new Date(download.createdAt).toLocaleDateString()}

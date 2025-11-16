@@ -150,210 +150,262 @@ class YouTubeDownloader:
                 video_info=None
             )
         
-        # Use video ID as filename in tmp directory
-        output_filename = f'{video_info.id}.%(ext)s'
-        output_path = str(self.output_dir / output_filename)
+        # Check if we need to cut the video
+        needs_cut = start_time is not None or end_time is not None
         
-        # Format selectors to try in order (most preferred first)
-        format_selectors = [
-            quality,  # Try user-specified format first
-            'bestvideo+bestaudio/best',  # Try best video+audio combo
-            'best[ext=mp4]/best[ext=webm]/best',  # Try mp4, then webm, then any
-            'best',  # Fallback to any best format
-        ]
+        # If we need to cut, check if cut video already exists
+        if needs_cut:
+            # Generate cut filename with start/end times
+            start_str = str(start_time) if start_time is not None else "0"
+            end_str = str(end_time) if end_time is not None else "full"
+            # Try common extensions
+            for ext in ['.mp4', '.webm', '.mkv', '.m4a']:
+                cut_filename = f'{video_info.id}_{start_str}_{end_str}{ext}'
+                cut_path = self.output_dir / cut_filename
+                if cut_path.exists() and cut_path.is_file():
+                    file_size = os.path.getsize(str(cut_path))
+                    print(f"✅ Cut video already exists: {cut_path} ({file_size} bytes)", file=sys.stderr)
+                    return DownloadResult(
+                        success=True,
+                        file_path=str(cut_path),
+                        file_size=file_size,
+                        error_message=None,
+                        video_info=video_info
+                    )
         
-        last_error = None
-        for format_selector in format_selectors:
-            # Common options to help with 403 errors and ensure complete downloads
-            base_opts = {
-                'outtmpl': output_path,
-                'format': format_selector,
-                'progress_hooks': [],  # Disable progress output
-                'quiet': True,  # Suppress output
-                'no_warnings': True,  # Suppress warnings
-                'noprogress': True,  # Disable progress
-                'nocheckcertificate': True,  # Skip certificate checks
-                'retries': 10,  # Retry on failures
-                'fragment_retries': 10,  # Retry fragments
-                'file_access_retries': 3,  # Retry file access
-                'sleep_interval': 1,  # Sleep between requests
-                'max_sleep_interval': 5,  # Max sleep interval
-                'sleep_interval_requests': 1,  # Sleep between requests
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'web'],  # Try different clients
-                    }
-                },
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-us,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate',
-                    'Connection': 'keep-alive',
-                },
-            }
-            
-            # For live streams, handle download options
-            if video_info.is_live and not download_from_start:
-                # Download from current point
-                ydl_opts = {
-                    **base_opts,
-                    'live_recording_duration': 3600,  # 1 hour max for live
-                    'live_from_start': False,
-                }
-            else:
-                # Download from start or regular video
-                ydl_opts = {
-                    **base_opts,
-                    'live_from_start': download_from_start,
-                }
-            
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    # Download the video
-                    ydl.download([url])
-                    # If we get here, download succeeded
-                    # Wait a moment for file operations to complete
-                    time.sleep(0.5)
+        # Check if full video already exists (for reuse when cutting)
+        full_video_path = None
+        for ext in ['.mp4', '.webm', '.mkv', '.m4a']:
+            full_path = self.output_dir / f'{video_info.id}{ext}'
+            if full_path.exists() and full_path.is_file():
+                # Verify file is complete (not a .part file)
+                if not full_path.name.endswith('.part') and not full_path.name.endswith('.ytdl'):
+                    full_video_path = str(full_path)
+                    print(f"✅ Full video already exists: {full_video_path}", file=sys.stderr)
                     break
-            except Exception as e:
-                last_error = e
-                error_msg = str(e)
-                # If format not available, try next format selector
-                if 'Requested format is not available' in error_msg or 'format is not available' in error_msg.lower():
-                    print(f"Format '{format_selector}' not available, trying next option...", file=sys.stderr)
-                    continue
-                # If 403 error, try next format selector (might work with different format)
-                if '403' in error_msg or 'Forbidden' in error_msg:
-                    print(f"403 Forbidden error with format '{format_selector}', trying next option...", file=sys.stderr)
-                    continue
-                # For other errors, re-raise
-                raise
-        else:
-            # All format selectors failed
-            return DownloadResult(
-                success=False,
-                file_path=None,
-                file_size=None,
-                error_message=f"All format selectors failed. Last error: {last_error}",
-                video_info=video_info
-            )
         
-        try:
-            # Wait for file operations to complete and retry finding the file
-            # yt-dlp may still be renaming .part files to final names
-            max_retries = 10
-            retry_delay = 1.0
-            original_file_path = None
-            
-            for attempt in range(max_retries):
-                # Find the downloaded file (exclude .part files which are incomplete)
-                downloaded_files = [
-                    f for f in self.output_dir.glob(f'{video_info.id}*')
-                    if not f.name.endswith('.part') and not f.name.endswith('.ytdl') and f.is_file()
-                ]
-                
-                if downloaded_files:
-                    # Get the most recent complete file (in case of multiple files)
-                    original_file_path = str(max(downloaded_files, key=lambda f: f.stat().st_mtime))
-                    # Verify it's not a .part file by checking the actual filename
-                    if not original_file_path.endswith('.part') and not original_file_path.endswith('.ytdl'):
-                        # Verify file is not still being written (check if size is stable)
-                        file_path_obj = Path(original_file_path)
-                        if file_path_obj.exists():
-                            size1 = file_path_obj.stat().st_size
-                            time.sleep(0.2)
-                            size2 = file_path_obj.stat().st_size
-                            if size1 == size2 and size1 > 0:
-                                break  # File size is stable, it's complete
-                
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 1.5, 3.0)  # Exponential backoff, max 3s
-            
-            if not original_file_path:
-                # Check if there are .part files (incomplete download)
-                part_files = list(self.output_dir.glob(f'{video_info.id}*.part'))
-                if part_files:
-                    return DownloadResult(
-                        success=False,
-                        file_path=None,
-                        file_size=None,
-                        error_message="Download incomplete - only .part file found. The download may have been interrupted.",
-                        video_info=video_info
-                    )
-                return DownloadResult(
-                    success=False,
-                    file_path=None,
-                    file_size=None,
-                    error_message="Download completed but file not found after waiting",
-                    video_info=video_info
-                )
-            
-            # Final safety check - ensure the path doesn't end with .part
-            if original_file_path.endswith('.part') or original_file_path.endswith('.ytdl'):
-                return DownloadResult(
-                    success=False,
-                    file_path=None,
-                    file_size=None,
-                    error_message="Download incomplete - file is still a .part file",
-                    video_info=video_info
-                )
-            
-            # If start_time or end_time is provided, cut the video
-            final_file_path = original_file_path
-            if start_time is not None or end_time is not None:
-                # Create output filename for cut video
-                output_ext = Path(original_file_path).suffix
-                cut_output_path = str(self.output_dir / f'{video_info.id}_cut{output_ext}')
-                
-                print(f"Cutting video from {start_time}s to {end_time}s...", file=sys.stderr)
-                if self.cut_video(original_file_path, cut_output_path, start_time, end_time):
-                    # Remove original file
-                    try:
-                        os.unlink(original_file_path)
-                    except Exception as e:
-                        print(f"Warning: Could not remove original file: {e}", file=sys.stderr)
-                    final_file_path = cut_output_path
-                else:
-                    return DownloadResult(
-                        success=False,
-                        file_path=None,
-                        file_size=None,
-                        error_message="Failed to cut video",
-                        video_info=video_info
-                    )
-            
-            file_size = os.path.getsize(final_file_path)
-            
-            # Final verification: ensure the file path doesn't contain .part
-            if '.part' in final_file_path or final_file_path.endswith('.ytdl'):
-                return DownloadResult(
-                    success=False,
-                    file_path=None,
-                    file_size=None,
-                    error_message=f"Download incomplete - file path contains .part: {final_file_path}",
-                    video_info=video_info
-                )
-            
-            print(f"✅ Download complete: {final_file_path} ({file_size} bytes)", file=sys.stderr)
-            
+        # If we don't need to cut and full video exists, return it
+        if not needs_cut and full_video_path:
+            file_size = os.path.getsize(full_video_path)
             return DownloadResult(
                 success=True,
-                file_path=final_file_path,
+                file_path=full_video_path,
                 file_size=file_size,
                 error_message=None,
                 video_info=video_info
             )
+        
+        # If we need to cut and full video exists, skip download and go straight to cutting
+        if needs_cut and full_video_path:
+            original_file_path = full_video_path
+        else:
+            # Use video ID as filename in tmp directory
+            output_filename = f'{video_info.id}.%(ext)s'
+            output_path = str(self.output_dir / output_filename)
+        
+            # Format selectors to try in order (most preferred first)
+            format_selectors = [
+                quality,  # Try user-specified format first
+                'bestvideo+bestaudio/best',  # Try best video+audio combo
+                'best[ext=mp4]/best[ext=webm]/best',  # Try mp4, then webm, then any
+                'best',  # Fallback to any best format
+            ]
             
-        except Exception as e:
+            last_error = None
+            for format_selector in format_selectors:
+                # Common options to help with 403 errors and ensure complete downloads
+                base_opts = {
+                    'outtmpl': output_path,
+                    'format': format_selector,
+                    'progress_hooks': [],  # Disable progress output
+                    'quiet': True,  # Suppress output
+                    'no_warnings': True,  # Suppress warnings
+                    'noprogress': True,  # Disable progress
+                    'nocheckcertificate': True,  # Skip certificate checks
+                    'retries': 10,  # Retry on failures
+                    'fragment_retries': 10,  # Retry fragments
+                    'file_access_retries': 3,  # Retry file access
+                    'sleep_interval': 1,  # Sleep between requests
+                    'max_sleep_interval': 5,  # Max sleep interval
+                    'sleep_interval_requests': 1,  # Sleep between requests
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android', 'web'],  # Try different clients
+                        }
+                    },
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'Connection': 'keep-alive',
+                    },
+                }
+                
+                # For live streams, handle download options
+                if video_info.is_live and not download_from_start:
+                    # Download from current point
+                    ydl_opts = {
+                        **base_opts,
+                        'live_recording_duration': 3600,  # 1 hour max for live
+                        'live_from_start': False,
+                    }
+                else:
+                    # Download from start or regular video
+                    ydl_opts = {
+                        **base_opts,
+                        'live_from_start': download_from_start,
+                    }
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        # Download the video
+                        ydl.download([url])
+                        # If we get here, download succeeded
+                        # Wait a moment for file operations to complete
+                        time.sleep(0.5)
+                        break
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e)
+                    # If format not available, try next format selector
+                    if 'Requested format is not available' in error_msg or 'format is not available' in error_msg.lower():
+                        print(f"Format '{format_selector}' not available, trying next option...", file=sys.stderr)
+                        continue
+                    # If 403 error, try next format selector (might work with different format)
+                    if '403' in error_msg or 'Forbidden' in error_msg:
+                        print(f"403 Forbidden error with format '{format_selector}', trying next option...", file=sys.stderr)
+                        continue
+                    # For other errors, re-raise
+                    raise
+            else:
+                # All format selectors failed
+                return DownloadResult(
+                    success=False,
+                    file_path=None,
+                    file_size=None,
+                    error_message=f"All format selectors failed. Last error: {last_error}",
+                    video_info=video_info
+                )
+            
+            try:
+                # Wait for file operations to complete and retry finding the file
+                # yt-dlp may still be renaming .part files to final names
+                max_retries = 10
+                retry_delay = 1.0
+                
+                for attempt in range(max_retries):
+                    # Find the downloaded file (exclude .part files which are incomplete)
+                    downloaded_files = [
+                        f for f in self.output_dir.glob(f'{video_info.id}*')
+                        if not f.name.endswith('.part') and not f.name.endswith('.ytdl') and f.is_file()
+                        and not '_' in f.name  # Exclude cut files (they have _ in name)
+                    ]
+                    
+                    if downloaded_files:
+                        # Get the most recent complete file (in case of multiple files)
+                        original_file_path = str(max(downloaded_files, key=lambda f: f.stat().st_mtime))
+                        # Verify it's not a .part file by checking the actual filename
+                        if not original_file_path.endswith('.part') and not original_file_path.endswith('.ytdl'):
+                            # Verify file is not still being written (check if size is stable)
+                            file_path_obj = Path(original_file_path)
+                            if file_path_obj.exists():
+                                size1 = file_path_obj.stat().st_size
+                                time.sleep(0.2)
+                                size2 = file_path_obj.stat().st_size
+                                if size1 == size2 and size1 > 0:
+                                    break  # File size is stable, it's complete
+                    
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 1.5, 3.0)  # Exponential backoff, max 3s
+                
+                if not original_file_path:
+                    # Check if there are .part files (incomplete download)
+                    part_files = list(self.output_dir.glob(f'{video_info.id}*.part'))
+                    if part_files:
+                        return DownloadResult(
+                            success=False,
+                            file_path=None,
+                            file_size=None,
+                            error_message="Download incomplete - only .part file found. The download may have been interrupted.",
+                            video_info=video_info
+                        )
+                    return DownloadResult(
+                        success=False,
+                        file_path=None,
+                        file_size=None,
+                        error_message="Download completed but file not found after waiting",
+                        video_info=video_info
+                    )
+                
+                # Final safety check - ensure the path doesn't end with .part
+                if original_file_path.endswith('.part') or original_file_path.endswith('.ytdl'):
+                    return DownloadResult(
+                        success=False,
+                        file_path=None,
+                        file_size=None,
+                        error_message="Download incomplete - file is still a .part file",
+                        video_info=video_info
+                    )
+            except Exception as e:
+                return DownloadResult(
+                    success=False,
+                    file_path=None,
+                    file_size=None,
+                    error_message=str(e),
+                    video_info=video_info
+                )
+        
+        # If start_time or end_time is provided, cut the video
+        final_file_path = original_file_path
+        if start_time is not None or end_time is not None:
+            # Create output filename for cut video with start/end times
+            output_ext = Path(original_file_path).suffix
+            start_str = str(start_time) if start_time is not None else "0"
+            end_str = str(end_time) if end_time is not None else "full"
+            cut_output_path = str(self.output_dir / f'{video_info.id}_{start_str}_{end_str}{output_ext}')
+            
+            print(f"Cutting video from {start_time}s to {end_time}s...", file=sys.stderr)
+            if self.cut_video(original_file_path, cut_output_path, start_time, end_time):
+                # Don't remove original file - keep it for reuse
+                # Only remove if it's a cut file (has _ in name) to avoid duplicates
+                if '_' in Path(original_file_path).stem:
+                    try:
+                        os.unlink(original_file_path)
+                    except Exception as e:
+                        print(f"Warning: Could not remove original file: {e}", file=sys.stderr)
+                final_file_path = cut_output_path
+            else:
+                return DownloadResult(
+                    success=False,
+                    file_path=None,
+                    file_size=None,
+                    error_message="Failed to cut video",
+                    video_info=video_info
+                )
+        
+        file_size = os.path.getsize(final_file_path)
+        
+        # Final verification: ensure the file path doesn't contain .part
+        if '.part' in final_file_path or final_file_path.endswith('.ytdl'):
             return DownloadResult(
                 success=False,
                 file_path=None,
                 file_size=None,
-                error_message=str(e),
+                error_message=f"Download incomplete - file path contains .part: {final_file_path}",
                 video_info=video_info
             )
+        
+        print(f"✅ Download complete: {final_file_path} ({file_size} bytes)", file=sys.stderr)
+        
+        return DownloadResult(
+            success=True,
+            file_path=final_file_path,
+            file_size=file_size,
+            error_message=None,
+            video_info=video_info
+        )
     
     def validate_url(self, url: str) -> bool:
         """Validate if URL is a valid YouTube URL"""
