@@ -4,9 +4,22 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { DownloadService } from "../lib/download-service.js";
 import type { Download, QueueStatus, VideoInfo } from "../lib/types.js";
+import { validateSameOrigin, handleOptionsRequest } from "../lib/cors.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Handle OPTIONS preflight
+  const optionsResponse = handleOptionsRequest(request);
+  if (optionsResponse) return optionsResponse;
+
+  // Validate same-origin for API-like requests
   const url = new URL(request.url);
+  if (
+    url.pathname.startsWith("/api/") ||
+    request.headers.get("x-requested-with")
+  ) {
+    validateSameOrigin(request);
+  }
+
   const page = parseInt(url.searchParams.get("page") || "1");
   const limit = 10;
   const offset = (page - 1) * limit;
@@ -20,7 +33,42 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  // Handle OPTIONS preflight
+  const optionsResponse = handleOptionsRequest(request);
+  if (optionsResponse) return optionsResponse;
+
+  // Validate same-origin
+  validateSameOrigin(request);
+
   const formData = await request.formData();
+  const actionType = formData.get("actionType") as string;
+
+  // Handle retry action
+  if (actionType === "retry") {
+    const downloadIdStr = formData.get("downloadId") as string;
+    const downloadId = downloadIdStr ? parseInt(downloadIdStr, 10) : null;
+
+    if (!downloadId || isNaN(downloadId)) {
+      return { success: false, error: "Invalid download ID" };
+    }
+
+    try {
+      await DownloadService.retryDownload(downloadId);
+      return {
+        success: true,
+        message: "Download queued for retry",
+      };
+    } catch (error) {
+      console.error(`💥 Error retrying download:`, error);
+      return {
+        success: false,
+        error:
+          error instanceof Error ? error.message : "Failed to retry download",
+      };
+    }
+  }
+
+  // Handle new download request
   const url = formData.get("url") as string;
   const startTimeStr = formData.get("startTime") as string;
   const endTimeStr = formData.get("endTime") as string;
@@ -230,59 +278,61 @@ export default function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-4xl mx-auto px-4">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+    <div className="min-h-screen bg-gray-50 py-4 sm:py-8">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6">
+        <div className="text-center mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 mb-2">
             YouTube Video Downloader
           </h1>
-          <p className="text-gray-600">
+          <p className="text-sm sm:text-base text-gray-600">
             Download and cut YouTube videos with custom start and end times
           </p>
         </div>
 
         {/* Queue Status */}
-        <div className="bg-white rounded-lg shadow-sm p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        <div className="bg-white rounded-lg shadow-sm p-4 sm:p-6 mb-6 sm:mb-8">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-4">
             Queue Status
           </h2>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
             <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">
+              <div className="text-xl sm:text-2xl font-bold text-blue-600">
                 {queueStatus.total}
               </div>
-              <div className="text-sm text-gray-600">Total</div>
+              <div className="text-xs sm:text-sm text-gray-600">Total</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-yellow-600">
+              <div className="text-xl sm:text-2xl font-bold text-yellow-600">
                 {queueStatus.pending}
               </div>
-              <div className="text-sm text-gray-600">Pending</div>
+              <div className="text-xs sm:text-sm text-gray-600">Pending</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">
+              <div className="text-xl sm:text-2xl font-bold text-green-600">
                 {queueStatus.downloading}
               </div>
-              <div className="text-sm text-gray-600">Downloading</div>
+              <div className="text-xs sm:text-sm text-gray-600">
+                Downloading
+              </div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">
+              <div className="text-xl sm:text-2xl font-bold text-green-600">
                 {queueStatus.completed}
               </div>
-              <div className="text-sm text-gray-600">Completed</div>
+              <div className="text-xs sm:text-sm text-gray-600">Completed</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-red-600">
+              <div className="text-xl sm:text-2xl font-bold text-red-600">
                 {queueStatus.failed}
               </div>
-              <div className="text-sm text-gray-600">Failed</div>
+              <div className="text-xs sm:text-sm text-gray-600">Failed</div>
             </div>
           </div>
         </div>
 
         {/* Download Form */}
-        <div className="bg-white rounded-lg shadow-sm p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        <div className="bg-white rounded-lg shadow-sm p-4 sm:p-6 mb-6 sm:mb-8">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-4">
             Add New Download
           </h2>
 
@@ -307,7 +357,7 @@ export default function HomePage() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label
                   htmlFor="startTime"
@@ -392,8 +442,8 @@ export default function HomePage() {
         </div>
 
         {/* Recent Downloads */}
-        <div className="bg-white rounded-lg shadow-sm p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        <div className="bg-white rounded-lg shadow-sm p-4 sm:p-6">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-4">
             Recent Downloads
           </h2>
 
@@ -413,6 +463,9 @@ export default function HomePage() {
 }
 
 function DownloadItem({ download }: { download: Download }) {
+  const retryFetcher = useFetcher();
+  const RetryForm = retryFetcher.Form;
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "COMPLETED":
@@ -427,6 +480,9 @@ function DownloadItem({ download }: { download: Download }) {
         return "text-gray-600 bg-gray-100";
     }
   };
+
+  const isExpired =
+    download.status === "COMPLETED" && download.fileExists === false;
 
   const formatFileSize = (bytes: number | null) => {
     if (!bytes) return "Unknown";
@@ -456,73 +512,108 @@ function DownloadItem({ download }: { download: Download }) {
     : null;
 
   return (
-    <div className="border border-gray-200 rounded-lg p-4">
-      <div className="flex items-start justify-between gap-4">
+    <div className="border border-gray-200 rounded-lg p-4 sm:p-5 hover:shadow-md transition-shadow">
+      {/* Header: Title, Cut badge, and Status */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-start gap-2 mb-2">
             <h3
-              className="font-medium text-gray-900 truncate flex-1 min-w-0"
+              className="font-semibold text-gray-900 text-base sm:text-lg line-clamp-2 flex-1 min-w-0"
               title={download.title || "Untitled Video"}
             >
               {download.title || "Untitled Video"}
             </h3>
             {isCut && (
-              <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 flex-shrink-0">
+              <span className="px-2 py-1 rounded-md text-xs font-medium bg-purple-100 text-purple-700 flex-shrink-0 mt-0.5">
                 ✂️ Cut
               </span>
             )}
           </div>
           <p
-            className="text-sm text-gray-600 mb-2 truncate"
+            className="text-xs sm:text-sm text-gray-500 truncate"
             title={download.url}
           >
             {download.url}
           </p>
+        </div>
+        <span
+          className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap self-start sm:self-auto ${getStatusColor(
+            download.status
+          )}`}
+        >
+          {download.status}
+        </span>
+      </div>
 
-          <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
-            <span className="truncate">
-              ID: {download.videoId || "Unknown"}
-            </span>
-            {download.fileSize && (
-              <span className="truncate">
-                Size: {formatFileSize(download.fileSize)}
-              </span>
-            )}
-            {timeRange && (
-              <span className="text-purple-600 font-medium truncate">
-                Time: {timeRange}
-              </span>
-            )}
-            <span className="truncate">
-              Created: {new Date(download.createdAt).toLocaleDateString()}
+      {/* Metadata Grid - Responsive */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4 text-sm">
+        <div className="flex flex-col">
+          <span className="text-xs text-gray-500 mb-0.5">Video ID</span>
+          <span className="text-gray-900 font-mono text-xs truncate">
+            {download.videoId || "Unknown"}
+          </span>
+        </div>
+        {download.fileSize && (
+          <div className="flex flex-col">
+            <span className="text-xs text-gray-500 mb-0.5">Size</span>
+            <span className="text-gray-900">
+              {formatFileSize(download.fileSize)}
             </span>
           </div>
-        </div>
-
-        <div className="flex flex-col items-end space-y-2">
-          <span
-            className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(
-              download.status
-            )}`}
-          >
-            {download.status}
+        )}
+        {timeRange && (
+          <div className="flex flex-col">
+            <span className="text-xs text-gray-500 mb-0.5">Time Range</span>
+            <span className="text-purple-600 font-medium">{timeRange}</span>
+          </div>
+        )}
+        <div className="flex flex-col">
+          <span className="text-xs text-gray-500 mb-0.5">Created</span>
+          <span className="text-gray-900">
+            {new Date(download.createdAt).toLocaleDateString()}
           </span>
-
-          {download.status === "COMPLETED" && (
-            <a
-              href={`/api/download/${download.id}`}
-              className="text-blue-600 hover:text-blue-800 text-sm"
-            >
-              Download Video
-            </a>
-          )}
-
-          {download.errorMessage && (
-            <p className="text-red-600 text-xs max-w-xs text-right">
-              {download.errorMessage}
-            </p>
-          )}
         </div>
+      </div>
+
+      {/* Actions and Error Message */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-3 border-t border-gray-100">
+        {download.status === "COMPLETED" && !isExpired && (
+          <a
+            href={`/api/download/${download.id}`}
+            className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+          >
+            Download Video
+          </a>
+        )}
+        {isExpired && (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+            <p className="text-orange-600 text-xs sm:text-sm font-medium">
+              ⚠️ Video link expired - file no longer available
+            </p>
+            <RetryForm method="post" className="inline-flex">
+              <input type="hidden" name="actionType" value="retry" />
+              <input
+                type="hidden"
+                name="downloadId"
+                value={download.id.toString()}
+              />
+              <button
+                type="submit"
+                disabled={retryFetcher.state === "submitting"}
+                className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-md hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {retryFetcher.state === "submitting"
+                  ? "Retrying..."
+                  : "Retry Download"}
+              </button>
+            </RetryForm>
+          </div>
+        )}
+        {download.errorMessage && (
+          <p className="text-red-600 text-xs sm:text-sm">
+            {download.errorMessage}
+          </p>
+        )}
       </div>
     </div>
   );

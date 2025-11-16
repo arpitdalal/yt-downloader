@@ -1,8 +1,16 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { DownloadService } from "../lib/download-service.js";
 import type { QueueStatus } from "../lib/types.js";
+import { validateSameOrigin, handleOptionsRequest } from "../lib/cors.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Handle OPTIONS preflight
+  const optionsResponse = handleOptionsRequest(request);
+  if (optionsResponse) return optionsResponse;
+
+  // Validate same-origin
+  validateSameOrigin(request);
+
   const url = new URL(request.url);
   const downloadId = url.searchParams.get("downloadId");
 

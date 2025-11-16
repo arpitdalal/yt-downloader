@@ -3,8 +3,16 @@ import { DownloadService } from "../lib/download-service.js";
 import { createReadStream, statSync, existsSync, readdirSync } from "node:fs";
 import { Readable } from "node:stream";
 import path from "node:path";
+import { validateSameOrigin, handleOptionsRequest } from "../lib/cors.js";
 
 export async function loader({ params, request }: LoaderFunctionArgs) {
+  // Handle OPTIONS preflight
+  const optionsResponse = handleOptionsRequest(request);
+  if (optionsResponse) return optionsResponse;
+
+  // Validate same-origin
+  validateSameOrigin(request);
+
   const downloadId = parseInt(params.id || "", 10);
 
   if (isNaN(downloadId)) {

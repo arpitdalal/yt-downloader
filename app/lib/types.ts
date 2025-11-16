@@ -1,6 +1,8 @@
-import type { Download } from "@prisma/client";
+import type { Download as PrismaDownload } from "@prisma/client";
 
-export type { Download };
+export type Download = PrismaDownload & {
+  fileExists?: boolean;
+};
 
 export type DownloadStatus = "PENDING" | "DOWNLOADING" | "COMPLETED" | "FAILED";
 

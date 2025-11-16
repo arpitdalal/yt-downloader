@@ -1,7 +1,15 @@
 import { data, type LoaderFunctionArgs } from "react-router";
 import { DownloadService } from "../lib/download-service.js";
+import { validateSameOrigin, handleOptionsRequest } from "../lib/cors.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Handle OPTIONS preflight
+  const optionsResponse = handleOptionsRequest(request);
+  if (optionsResponse) return optionsResponse;
+
+  // Validate same-origin
+  validateSameOrigin(request);
+
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1");
   const limit = 10;

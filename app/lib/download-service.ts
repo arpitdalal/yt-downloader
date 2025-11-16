@@ -1,6 +1,7 @@
 import { prisma } from "./db.js";
 import type { Download, DownloadStatus, VideoInfo } from "./types.js";
 import { z } from "zod";
+import { existsSync } from "node:fs";
 
 const urlSchema = z
   .string()
@@ -388,8 +389,25 @@ export class DownloadService {
         skip: offset,
       });
 
+      // Check if files exist for completed downloads
+      const downloadsWithFileCheck = downloads.map((download) => {
+        let fileExists = false;
+        if (download.status === "COMPLETED" && download.filePath) {
+          fileExists = existsSync(download.filePath);
+          if (!fileExists) {
+            console.log(
+              `⚠️ File not found for completed download ID ${download.id}: ${download.filePath}`
+            );
+          }
+        }
+        return {
+          ...download,
+          fileExists,
+        };
+      });
+
       console.log(`✅ Retrieved ${downloads.length} downloads`);
-      return downloads;
+      return downloadsWithFileCheck as Download[];
     } catch (error) {
       console.error(`💥 Error getting all downloads:`, error);
       throw error;
@@ -428,6 +446,42 @@ export class DownloadService {
       return downloads;
     } catch (error) {
       console.error(`💥 Error getting completed downloads:`, error);
+      throw error;
+    }
+  }
+
+  static async retryDownload(downloadId: number): Promise<Download> {
+    console.log(`🔄 Retrying download ID ${downloadId}`);
+
+    try {
+      const download = await prisma.download.findUnique({
+        where: { id: downloadId },
+      });
+
+      if (!download) {
+        throw new Error(`Download ID ${downloadId} not found`);
+      }
+
+      // Reset download status and clear file info
+      const updatedDownload = await prisma.download.update({
+        where: { id: downloadId },
+        data: {
+          status: "PENDING",
+          filePath: null,
+          fileSize: null,
+          errorMessage: null,
+          startedAt: null,
+          completedAt: null,
+        },
+      });
+
+      // Add back to queue
+      await this.addToQueue(downloadId);
+
+      console.log(`✅ Download ID ${downloadId} queued for retry`);
+      return updatedDownload;
+    } catch (error) {
+      console.error(`💥 Error retrying download ID ${downloadId}:`, error);
       throw error;
     }
   }
