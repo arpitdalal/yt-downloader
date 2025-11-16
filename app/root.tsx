@@ -51,12 +51,10 @@ if (typeof window === "undefined") {
   import("./lib/db.js").then(async ({ connectDatabase }) => {
     try {
       await connectDatabase();
-      console.log("Database connected successfully");
 
       // Start queue processor
       const { startQueueProcessor } = await import("./lib/worker.js");
       startQueueProcessor();
-      console.log("Queue processor started");
     } catch (error) {
       console.error("Failed to initialize app:", error);
     }

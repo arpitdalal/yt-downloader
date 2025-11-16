@@ -80,11 +80,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const startTimeStr = formData.get("startTime") as string;
   const endTimeStr = formData.get("endTime") as string;
 
-  console.log(`📥 Received download request for URL: ${url}`);
-  console.log(`📥 Start time: ${startTimeStr}, End time: ${endTimeStr}`);
-
   if (!url) {
-    console.log(`❌ No URL provided in request`);
     return { success: false, error: "URL is required" };
   }
 
@@ -114,15 +110,11 @@ export async function action({ request }: ActionFunctionArgs) {
 
   try {
     // Extract video info first using Python script directly
-    console.log(`🔍 Extracting video information...`);
     const videoInfo = await extractVideoInfo(url);
 
     if (!videoInfo) {
-      console.log(`❌ Failed to extract video information`);
       return { success: false, error: "Failed to extract video information" };
     }
-
-    console.log(`✅ Video info extracted: ${videoInfo.title}`);
 
     // Check if download with this videoId and start/end times already exists
     if (videoInfo.id) {
@@ -133,9 +125,6 @@ export async function action({ request }: ActionFunctionArgs) {
           endTime
         );
       if (existingByVideoId) {
-        console.log(
-          `✅ Found existing download for video ID ${videoInfo.id} with matching times: ID ${existingByVideoId.id}`
-        );
         // If it's completed, return it
         if (existingByVideoId.status === "COMPLETED") {
           return {
@@ -155,19 +144,14 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     // Create new download with video info
-    console.log(`📝 Creating new download entry...`);
     const download = await DownloadService.createDownload(
       url,
       videoInfo,
       startTime,
       endTime
     );
-    console.log(`📋 Adding download to queue...`);
     await DownloadService.addToQueue(download.id);
 
-    console.log(
-      `✅ Download request processed successfully: ID ${download.id}`
-    );
     return {
       success: true,
       download_id: download.id,
@@ -531,11 +515,6 @@ function DownloadItem({ download }: { download: Download }) {
         formatTime(download.endTime) || "end"
       }`
     : null;
-
-  // Debug: log progress for downloading items
-  if (download.status === "DOWNLOADING") {
-    console.log(`Download ${download.id} progress:`, download.progressPercent);
-  }
 
   return (
     <div className="border border-gray-200 rounded-lg p-4 sm:p-5 hover:shadow-md transition-shadow">

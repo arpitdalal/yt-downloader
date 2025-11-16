@@ -41,8 +41,6 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
 
   // If the stored path is a .part file, try to find the complete file
   if (filePath.endsWith('.part') || filePath.endsWith('.ytdl')) {
-    console.log(`⚠️ Stored path is a .part file for download ${downloadId}, searching for complete file...`);
-    
     // Try to find the complete file in the same directory
     const dir = path.dirname(filePath);
     const baseName = path.basename(filePath, path.extname(filePath));
@@ -83,7 +81,6 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
       
       if (completeFile) {
         const newPath = path.join(dir, completeFile);
-        console.log(`✅ Found complete file: ${newPath}, updating database...`);
         filePath = newPath;
         
         // Update the database with the correct path

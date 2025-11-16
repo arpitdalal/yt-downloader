@@ -6,25 +6,16 @@ const activeDownloads = new Map<number, ChildProcess>();
 
 export class DownloadWorker {
 	static async processQueue(): Promise<void> {
-		console.log("🔄 Processing download queue...");
-
 		if (activeDownloads.size >= MAX_CONCURRENT_DOWNLOADS) {
-			console.log(
-				`⏸️ Queue processing paused - ${activeDownloads.size} downloads already active`,
-			);
 			return; // Already at max capacity
 		}
 
 		const nextDownload = await DownloadService.getNextPendingDownload();
 		if (!nextDownload) {
-			console.log("✅ No pending downloads in queue");
 			return; // No pending downloads
 		}
 
 		const { download, queueItem } = nextDownload;
-		console.log(
-			`🚀 Starting download for ID: ${download.id}, URL: ${download.url}`,
-		);
 
 		// Mark as downloading and reset progress
 		await DownloadService.updateDownloadStatus(download.id, "DOWNLOADING", {
@@ -45,7 +36,6 @@ export class DownloadWorker {
 		downloadId: number,
 		url: string,
 	): Promise<void> {
-		console.log(`🐍 Starting Python download process for ID: ${downloadId}`);
 
 		// Get download info to retrieve start/end times
 		const download = await DownloadService.getDownloadById(downloadId);
@@ -76,7 +66,6 @@ export class DownloadWorker {
 		const pythonProcess = spawn("python3", args);
 
 		activeDownloads.set(downloadId, pythonProcess);
-		console.log(`📊 Active downloads: ${activeDownloads.size}`);
 
 		let stdout = "";
 		let stderr = "";
@@ -84,7 +73,6 @@ export class DownloadWorker {
 		pythonProcess.stdout.on("data", (data) => {
 			const output = data.toString();
 			stdout += output;
-			console.log(`📤 Python stdout (ID ${downloadId}): ${output.trim()}`);
 		});
 
 		pythonProcess.stderr.on("data", async (data) => {
@@ -99,30 +87,18 @@ export class DownloadWorker {
 					if (parsed.type === 'progress' && parsed.percent !== null && parsed.percent !== undefined) {
 						// Update progress in database
 						await DownloadService.updateDownloadProgress(downloadId, parsed.percent);
-						console.log(`📊 Progress update for ID ${downloadId}: ${parsed.percent}%`);
-					} else {
-						// Regular stderr output
-						console.error(`❌ Python stderr (ID ${downloadId}): ${line.trim()}`);
 					}
 				} catch (e) {
-					// Not JSON, treat as regular stderr output
-					console.error(`❌ Python stderr (ID ${downloadId}): ${line.trim()}`);
+					// Not JSON, ignore non-progress stderr output
 				}
 			}
 		});
 
 		pythonProcess.on("close", async (code) => {
-			console.log(
-				`🔚 Python process closed for ID ${downloadId} with code: ${code}`,
-			);
 			activeDownloads.delete(downloadId);
 
 			try {
 				if (code === 0) {
-					console.log(
-						`✅ Python process completed successfully for ID ${downloadId}`,
-					);
-					console.log(`📄 Full stdout for ID ${downloadId}:`, stdout);
 
 					// Extract JSON from stdout (handle any mixed output)
 					let jsonStr = stdout.trim();
@@ -133,16 +109,12 @@ export class DownloadWorker {
 						const jsonMatch = jsonStr.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
 						if (jsonMatch && jsonMatch.length > 0) {
 							jsonStr = jsonMatch[jsonMatch.length - 1];
-							console.log(`🔍 Extracted JSON from mixed output:`, jsonStr);
 						}
 					}
 
 					const result = JSON.parse(jsonStr);
 
 					if (result.success) {
-						console.log(
-							`🎉 Download successful for ID ${downloadId}, file: ${result.file_path}`,
-						);
 						// Download successful, save file path and set progress to 100%
 						await DownloadService.updateDownloadProgress(downloadId, 100);
 						await DownloadService.updateDownloadStatus(
@@ -186,7 +158,6 @@ export class DownloadWorker {
 			}
 
 			// Process next item in queue
-			console.log(`🔄 Moving to next download in queue...`);
 			DownloadWorker.processQueue();
 		});
 
@@ -213,7 +184,6 @@ export class DownloadWorker {
 	static stopDownload(downloadId: number): boolean {
 		const process = activeDownloads.get(downloadId);
 		if (process) {
-			console.log(`🛑 Stopping download ID ${downloadId}`);
 			process.kill();
 			activeDownloads.delete(downloadId);
 			return true;
@@ -222,7 +192,6 @@ export class DownloadWorker {
 	}
 
 	static stopAllDownloads(): void {
-		console.log(`🛑 Stopping all downloads (${activeDownloads.size} active)`);
 		for (const [downloadId, process] of activeDownloads) {
 			process.kill();
 		}
@@ -234,8 +203,6 @@ export class DownloadWorker {
 let queueInterval: NodeJS.Timeout | null = null;
 
 export function startQueueProcessor(): void {
-	console.log("🚀 Starting queue processor...");
-
 	if (queueInterval) {
 		clearInterval(queueInterval);
 	}
@@ -244,21 +211,15 @@ export function startQueueProcessor(): void {
 		try {
 			await DownloadWorker.processQueue();
 		} catch (error) {
-			console.error("💥 Error processing queue:", error);
+			console.error("Error processing queue:", error);
 		}
 	}, 5000);
-
-	console.log("✅ Queue processor started (checking every 5 seconds)");
 }
 
 export function stopQueueProcessor(): void {
-	console.log("🛑 Stopping queue processor...");
-
 	if (queueInterval) {
 		clearInterval(queueInterval);
 		queueInterval = null;
 	}
 	DownloadWorker.stopAllDownloads();
-
-	console.log("✅ Queue processor stopped");
 }

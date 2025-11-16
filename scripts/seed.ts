@@ -1,8 +1,6 @@
 import { prisma } from "../app/lib/db.js";
 
 async function main() {
-  console.log("🌱 Seeding database...");
-
   // Create some sample downloads for testing
   const sampleDownloads = [
     {
@@ -38,11 +36,7 @@ async function main() {
         },
       });
     }
-
-    console.log(`✅ Created download: ${download.title}`);
   }
-
-  console.log("🎉 Database seeded successfully!");
 }
 
 main()

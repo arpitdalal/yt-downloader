@@ -164,7 +164,6 @@ class YouTubeDownloader:
                 cut_path = self.output_dir / cut_filename
                 if cut_path.exists() and cut_path.is_file():
                     file_size = os.path.getsize(str(cut_path))
-                    print(f"✅ Cut video already exists: {cut_path} ({file_size} bytes)", file=sys.stderr)
                     return DownloadResult(
                         success=True,
                         file_path=str(cut_path),
@@ -181,7 +180,6 @@ class YouTubeDownloader:
                 # Verify file is complete (not a .part file)
                 if not full_path.name.endswith('.part') and not full_path.name.endswith('.ytdl'):
                     full_video_path = str(full_path)
-                    print(f"✅ Full video already exists: {full_video_path}", file=sys.stderr)
                     break
         
         # If we don't need to cut and full video exists, return it
@@ -299,11 +297,9 @@ class YouTubeDownloader:
                     error_msg = str(e)
                     # If format not available, try next format selector
                     if 'Requested format is not available' in error_msg or 'format is not available' in error_msg.lower():
-                        print(f"Format '{format_selector}' not available, trying next option...", file=sys.stderr)
                         continue
                     # If 403 error, try next format selector (might work with different format)
                     if '403' in error_msg or 'Forbidden' in error_msg:
-                        print(f"403 Forbidden error with format '{format_selector}', trying next option...", file=sys.stderr)
                         continue
                     # For other errors, re-raise
                     raise
@@ -395,15 +391,14 @@ class YouTubeDownloader:
             end_str = str(end_time) if end_time is not None else "full"
             cut_output_path = str(self.output_dir / f'{video_info.id}_{start_str}_{end_str}{output_ext}')
             
-            print(f"Cutting video from {start_time}s to {end_time}s...", file=sys.stderr)
             if self.cut_video(original_file_path, cut_output_path, start_time, end_time):
                 # Don't remove original file - keep it for reuse
                 # Only remove if it's a cut file (has _ in name) to avoid duplicates
                 if '_' in Path(original_file_path).stem:
                     try:
                         os.unlink(original_file_path)
-                    except Exception as e:
-                        print(f"Warning: Could not remove original file: {e}", file=sys.stderr)
+                    except Exception:
+                        pass
                 final_file_path = cut_output_path
             else:
                 return DownloadResult(
@@ -425,8 +420,6 @@ class YouTubeDownloader:
                 error_message=f"Download incomplete - file path contains .part: {final_file_path}",
                 video_info=video_info
             )
-        
-        print(f"✅ Download complete: {final_file_path} ({file_size} bytes)", file=sys.stderr)
         
         return DownloadResult(
             success=True,
