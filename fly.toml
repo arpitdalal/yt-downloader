@@ -10,7 +10,7 @@ dockerfile = "Dockerfile"
 [env]
 NODE_ENV = "production"
 DATABASE_URL = "file:/app/data/downloads.db"
-MAX_CONCURRENT_DOWNLOADS = "2"
+MAX_CONCURRENT_DOWNLOADS = "1"
 
 [[services]]
 internal_port = 3000

@@ -49,7 +49,7 @@ class YouTubeDownloader:
             self.output_dir = Path(output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
         else:
-            # Use tmp directory for fly.io
+            # Use /tmp for ephemeral storage (free on Fly.io, but lost on restart)
             self.output_dir = Path("/tmp")
             self.output_dir.mkdir(parents=True, exist_ok=True)
         

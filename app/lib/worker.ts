@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import { DownloadService } from "./download-service.js";
 
-const MAX_CONCURRENT_DOWNLOADS = 2;
+const MAX_CONCURRENT_DOWNLOADS = parseInt(process.env.MAX_CONCURRENT_DOWNLOADS || "1", 10);
 const activeDownloads = new Map<number, ChildProcess>();
 
 export class DownloadWorker {
