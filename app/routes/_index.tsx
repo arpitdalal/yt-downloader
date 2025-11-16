@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { DownloadService } from "../lib/download-service.js";
@@ -71,11 +71,12 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Check if download with this videoId and start/end times already exists
     if (videoInfo.id) {
-      const existingByVideoId = await DownloadService.getDownloadByVideoIdAndTimes(
-        videoInfo.id,
-        startTime,
-        endTime
-      );
+      const existingByVideoId =
+        await DownloadService.getDownloadByVideoIdAndTimes(
+          videoInfo.id,
+          startTime,
+          endTime
+        );
       if (existingByVideoId) {
         console.log(
           `✅ Found existing download for video ID ${videoInfo.id} with matching times: ID ${existingByVideoId.id}`
@@ -181,14 +182,37 @@ async function extractVideoInfo(url: string): Promise<VideoInfo | null> {
 }
 
 export default function HomePage() {
-  const { downloads, queueStatus } = useLoaderData<typeof loader>();
+  const loaderData = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
+  const statusFetcher = useFetcher();
   const [url, setUrl] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
+  const [downloads, setDownloads] = useState<Download[]>(loaderData.downloads);
+  const [queueStatus, setQueueStatus] = useState<QueueStatus>(
+    loaderData.queueStatus
+  );
 
   const isSubmitting = fetcher.state === "submitting";
   const actionData = fetcher.data;
+
+  // Poll for updates every second using useFetcher
+  useEffect(() => {
+    const interval = setInterval(() => {
+      statusFetcher.load("/api/poll");
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [statusFetcher]);
+
+  // Update state when fetcher data changes
+  useEffect(() => {
+    if (statusFetcher.data) {
+      const data = statusFetcher.data as typeof loaderData;
+      if (data.downloads) setDownloads(data.downloads);
+      if (data.queueStatus) setQueueStatus(data.queueStatus);
+    }
+  }, [statusFetcher.data]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -415,45 +439,61 @@ function DownloadItem({ download }: { download: Download }) {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
-    
+
     if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs
+        .toString()
+        .padStart(2, "0")}`;
     }
     return `${minutes}:${secs.toString().padStart(2, "0")}`;
   };
 
   const isCut = download.startTime !== null || download.endTime !== null;
   const timeRange = isCut
-    ? `${formatTime(download.startTime) || "0:00"} - ${formatTime(download.endTime) || "end"}`
+    ? `${formatTime(download.startTime) || "0:00"} - ${
+        formatTime(download.endTime) || "end"
+      }`
     : null;
 
   return (
     <div className="border border-gray-200 rounded-lg p-4">
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-medium text-gray-900">
+            <h3
+              className="font-medium text-gray-900 truncate flex-1 min-w-0"
+              title={download.title || "Untitled Video"}
+            >
               {download.title || "Untitled Video"}
             </h3>
             {isCut && (
-              <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
+              <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 flex-shrink-0">
                 ✂️ Cut
               </span>
             )}
           </div>
-          <p className="text-sm text-gray-600 mb-2">{download.url}</p>
+          <p
+            className="text-sm text-gray-600 mb-2 truncate"
+            title={download.url}
+          >
+            {download.url}
+          </p>
 
-          <div className="flex items-center space-x-4 text-sm text-gray-500">
-            <span>ID: {download.videoId || "Unknown"}</span>
+          <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
+            <span className="truncate">
+              ID: {download.videoId || "Unknown"}
+            </span>
             {download.fileSize && (
-              <span>Size: {formatFileSize(download.fileSize)}</span>
+              <span className="truncate">
+                Size: {formatFileSize(download.fileSize)}
+              </span>
             )}
             {timeRange && (
-              <span className="text-purple-600 font-medium">
+              <span className="text-purple-600 font-medium truncate">
                 Time: {timeRange}
               </span>
             )}
-            <span>
+            <span className="truncate">
               Created: {new Date(download.createdAt).toLocaleDateString()}
             </span>
           </div>
