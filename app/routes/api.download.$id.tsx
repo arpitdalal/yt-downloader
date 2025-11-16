@@ -4,8 +4,12 @@ import { createReadStream, statSync, existsSync, readdirSync } from "node:fs";
 import { Readable } from "node:stream";
 import path from "node:path";
 import { validateSameOrigin, handleOptionsRequest } from "../lib/cors.js";
+import { requireAuth } from "../lib/auth.js";
 
 export async function loader({ params, request }: LoaderFunctionArgs) {
+  // Require authentication
+  await requireAuth(request);
+
   // Handle OPTIONS preflight
   const optionsResponse = handleOptionsRequest(request);
   if (optionsResponse) return optionsResponse;

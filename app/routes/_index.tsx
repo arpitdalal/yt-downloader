@@ -1,12 +1,16 @@
 import { spawn } from "child_process";
 import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, Form } from "react-router";
 import { DownloadService } from "../lib/download-service.js";
 import type { Download, QueueStatus, VideoInfo } from "../lib/types.js";
 import { validateSameOrigin, handleOptionsRequest } from "../lib/cors.js";
+import { requireAuth } from "../lib/auth.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Require authentication
+  await requireAuth(request);
+
   // Handle OPTIONS preflight
   const optionsResponse = handleOptionsRequest(request);
   if (optionsResponse) return optionsResponse;
@@ -33,6 +37,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  // Require authentication
+  await requireAuth(request);
+
   // Handle OPTIONS preflight
   const optionsResponse = handleOptionsRequest(request);
   if (optionsResponse) return optionsResponse;
@@ -280,13 +287,27 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-gray-50 py-4 sm:py-8">
       <div className="max-w-4xl mx-auto px-4 sm:px-6">
-        <div className="text-center mb-6 sm:mb-8">
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 mb-2">
-            YouTube Video Downloader
-          </h1>
-          <p className="text-sm sm:text-base text-gray-600">
-            Download and cut YouTube videos with custom start and end times
-          </p>
+        <div className="mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4 sm:mb-6">
+            <div className="text-center sm:text-left flex-1">
+              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 mb-2">
+                YouTube Video Downloader
+              </h1>
+              <p className="text-sm sm:text-base text-gray-600">
+                Download and cut YouTube videos with custom start and end times
+              </p>
+            </div>
+            <div className="flex justify-center sm:justify-end">
+              <Form method="post" action="/logout">
+                <button
+                  type="submit"
+                  className="text-sm font-medium text-gray-700 hover:text-gray-900 px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                >
+                  Logout
+                </button>
+              </Form>
+            </div>
+          </div>
         </div>
 
         {/* Queue Status */}

@@ -2,8 +2,12 @@ import type { LoaderFunctionArgs } from "react-router";
 import { DownloadService } from "../lib/download-service.js";
 import type { QueueStatus } from "../lib/types.js";
 import { validateSameOrigin, handleOptionsRequest } from "../lib/cors.js";
+import { requireAuth } from "../lib/auth.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Require authentication
+  await requireAuth(request);
+
   // Handle OPTIONS preflight
   const optionsResponse = handleOptionsRequest(request);
   if (optionsResponse) return optionsResponse;
