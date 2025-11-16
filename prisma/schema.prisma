@@ -1,0 +1,49 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Download {
+  id                  Int       @id @default(autoincrement())
+  url                 String
+  title               String?
+  status              String    @default("PENDING") // PENDING, DOWNLOADING, COMPLETED, FAILED
+  createdAt           DateTime  @default(now()) @map("created_at")
+  startedAt           DateTime? @map("started_at")
+  completedAt         DateTime? @map("completed_at")
+  filePath            String?   @map("file_path") // Local file path where video is stored
+  fileSize            Int?      @map("file_size") // File size in bytes
+  errorMessage        String?   @map("error_message")
+  videoId             String?   @unique @map("video_id")
+  isLive              Boolean   @default(false) @map("is_live")
+  isScheduled         Boolean   @default(false) @map("is_scheduled")
+  scheduledStartTime  DateTime? @map("scheduled_start_time")
+  startTime           Int?      @map("start_time") // Start time in seconds for video cutting
+  endTime             Int?      @map("end_time")   // End time in seconds for video cutting
+
+  queueItem           QueueItem?
+
+  @@index([status])
+  @@index([videoId])
+  @@index([createdAt])
+  @@map("downloads")
+}
+
+model QueueItem {
+  id          Int       @id @default(autoincrement())
+  downloadId  Int       @unique @map("download_id")
+  priority    Int       @default(0) // Higher priority = processed first
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  download    Download  @relation(fields: [downloadId], references: [id], onDelete: Cascade)
+
+  @@index([priority, createdAt]) // For efficient queue ordering
+  @@map("queue")
+}

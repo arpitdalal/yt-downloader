@@ -1,0 +1,37 @@
+app = "yt-downloader"
+primary_region = "yyz"
+kill_signal = "SIGINT"
+kill_timeout = 5
+swap_size_mb = 512
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+NODE_ENV = "production"
+DATABASE_URL = "file:/app/data/downloads.db"
+MAX_CONCURRENT_DOWNLOADS = "2"
+
+[[services]]
+internal_port = 3000
+protocol = "tcp"
+
+[[services.ports]]
+port = 80
+handlers = ["http"]
+
+[[services.ports]]
+port = 443
+handlers = ["tls", "http"]
+
+[[mounts]]
+source = "data"
+destination = "/app/data"
+
+[processes]
+app = "npm start"
+
+[[vm]]
+cpu_kind = "shared"
+cpus = 1
+memory_mb = 256
