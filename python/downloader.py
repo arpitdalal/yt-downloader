@@ -213,14 +213,43 @@ class YouTubeDownloader:
             
             last_error = None
             for format_selector in format_selectors:
+                # Progress hook to report download progress
+                def progress_hook(d):
+                    if d['status'] == 'downloading':
+                        percent_float = None
+                        # Try to get percent from _percent_str first
+                        percent_str = d.get('_percent_str', '')
+                        if percent_str:
+                            try:
+                                percent_float = float(percent_str.strip('%'))
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # If percent_str not available, calculate from bytes
+                        if percent_float is None:
+                            downloaded = d.get('downloaded_bytes')
+                            total = d.get('total_bytes')
+                            if downloaded is not None and total is not None and total > 0:
+                                percent_float = (downloaded / total) * 100
+                        
+                        progress_data = {
+                            'type': 'progress',
+                            'percent': percent_float,
+                            'downloaded_bytes': d.get('downloaded_bytes'),
+                            'total_bytes': d.get('total_bytes'),
+                            'speed': d.get('_speed_str', 'N/A'),
+                            'eta': d.get('_eta_str', 'N/A')
+                        }
+                        # Output progress as JSON to stderr (so it doesn't interfere with final JSON output)
+                        print(json.dumps(progress_data), file=sys.stderr, flush=True)
+                
                 # Common options to help with 403 errors and ensure complete downloads
                 base_opts = {
                     'outtmpl': output_path,
                     'format': format_selector,
-                    'progress_hooks': [],  # Disable progress output
+                    'progress_hooks': [progress_hook],  # Enable progress reporting
                     'quiet': True,  # Suppress output
                     'no_warnings': True,  # Suppress warnings
-                    'noprogress': True,  # Disable progress
                     'nocheckcertificate': True,  # Skip certificate checks
                     'retries': 10,  # Retry on failures
                     'fragment_retries': 10,  # Retry fragments

@@ -26,10 +26,11 @@ export class DownloadWorker {
 			`🚀 Starting download for ID: ${download.id}, URL: ${download.url}`,
 		);
 
-		// Mark as downloading
+		// Mark as downloading and reset progress
 		await DownloadService.updateDownloadStatus(download.id, "DOWNLOADING", {
 			startedAt: new Date(),
 		});
+		await DownloadService.updateDownloadProgress(download.id, 0);
 
 		// Remove from queue
 		await DownloadService.removeFromQueue(download.id);
@@ -86,10 +87,28 @@ export class DownloadWorker {
 			console.log(`📤 Python stdout (ID ${downloadId}): ${output.trim()}`);
 		});
 
-		pythonProcess.stderr.on("data", (data) => {
+		pythonProcess.stderr.on("data", async (data) => {
 			const error = data.toString();
 			stderr += error;
-			console.error(`❌ Python stderr (ID ${downloadId}): ${error.trim()}`);
+			
+			// Parse progress updates from stderr (they're JSON lines)
+			const lines = error.split('\n').filter(line => line.trim());
+			for (const line of lines) {
+				try {
+					const parsed = JSON.parse(line.trim());
+					if (parsed.type === 'progress' && parsed.percent !== null && parsed.percent !== undefined) {
+						// Update progress in database
+						await DownloadService.updateDownloadProgress(downloadId, parsed.percent);
+						console.log(`📊 Progress update for ID ${downloadId}: ${parsed.percent}%`);
+					} else {
+						// Regular stderr output
+						console.error(`❌ Python stderr (ID ${downloadId}): ${line.trim()}`);
+					}
+				} catch (e) {
+					// Not JSON, treat as regular stderr output
+					console.error(`❌ Python stderr (ID ${downloadId}): ${line.trim()}`);
+				}
+			}
 		});
 
 		pythonProcess.on("close", async (code) => {
@@ -124,7 +143,8 @@ export class DownloadWorker {
 						console.log(
 							`🎉 Download successful for ID ${downloadId}, file: ${result.file_path}`,
 						);
-						// Download successful, save file path
+						// Download successful, save file path and set progress to 100%
+						await DownloadService.updateDownloadProgress(downloadId, 100);
 						await DownloadService.updateDownloadStatus(
 							downloadId,
 							"COMPLETED",

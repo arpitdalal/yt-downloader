@@ -249,6 +249,23 @@ export class DownloadService {
     }
   }
 
+  static async updateDownloadProgress(
+    id: number,
+    progressPercent: number
+  ): Promise<Download> {
+    try {
+      const download = await prisma.download.update({
+        where: { id },
+        data: { progressPercent },
+      });
+
+      return download;
+    } catch (error) {
+      console.error(`💥 Error updating download ID ${id} progress:`, error);
+      throw error;
+    }
+  }
+
   static async getNextPendingDownload(): Promise<{
     download: Download;
     queueItem: {

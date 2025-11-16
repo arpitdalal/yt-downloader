@@ -511,6 +511,11 @@ function DownloadItem({ download }: { download: Download }) {
       }`
     : null;
 
+  // Debug: log progress for downloading items
+  if (download.status === "DOWNLOADING") {
+    console.log(`Download ${download.id} progress:`, download.progressPercent);
+  }
+
   return (
     <div className="border border-gray-200 rounded-lg p-4 sm:p-5 hover:shadow-md transition-shadow">
       {/* Header: Title, Cut badge, and Status */}
@@ -574,6 +579,35 @@ function DownloadItem({ download }: { download: Download }) {
           </span>
         </div>
       </div>
+
+      {/* Progress Bar - Show when downloading */}
+      {download.status === "DOWNLOADING" && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-gray-600 font-medium">
+              Download Progress
+            </span>
+            {typeof download.progressPercent === "number" ? (
+              <span className="text-xs text-gray-600 font-medium">
+                {download.progressPercent.toFixed(1)}%
+              </span>
+            ) : (
+              <span className="text-xs text-gray-500">Starting...</span>
+            )}
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div
+              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+              style={{
+                width:
+                  typeof download.progressPercent === "number"
+                    ? `${Math.min(100, Math.max(0, download.progressPercent))}%`
+                    : "0%",
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Actions and Error Message */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-3 border-t border-gray-100">
