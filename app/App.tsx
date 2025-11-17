@@ -40,17 +40,41 @@ export default function App() {
   }, [status]);
 
   const sanitizeFilename = (filename: string): string => {
-    // Remove invalid characters for filenames
-    return filename
+    // Remove emojis and other special Unicode characters
+    // Emoji ranges: U+1F300-U+1F9FF, U+2600-U+26FF, U+2700-U+27BF, U+FE00-U+FE0F, U+1F900-U+1F9FF, U+1F1E0-U+1F1FF
+    // Also remove other problematic Unicode characters
+    let sanitized = filename
+      // Remove emojis and emoji-related characters
+      .replace(/[\u{1F300}-\u{1F9FF}]/gu, "") // Miscellaneous Symbols and Pictographs
+      .replace(/[\u{2600}-\u{26FF}]/gu, "") // Miscellaneous Symbols
+      .replace(/[\u{2700}-\u{27BF}]/gu, "") // Dingbats
+      .replace(/[\u{FE00}-\u{FE0F}]/gu, "") // Variation Selectors
+      .replace(/[\u{1F900}-\u{1F9FF}]/gu, "") // Supplemental Symbols and Pictographs
+      .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, "") // Regional Indicator Symbols
+      .replace(/[\u{200D}]/gu, "") // Zero Width Joiner
+      .replace(/[\u{FE0F}]/gu, "") // Variation Selector-16
+      // Remove other special Unicode characters (keep ASCII alphanumeric, spaces, hyphens, underscores, periods)
+      .replace(/[^\x20-\x7E\u00A0-\u00FF]/g, "") // Keep ASCII and Latin-1 Supplement, remove rest
+      // Remove invalid filename characters
       .replace(/[<>:"/\\|?*]/g, "")
       .replace(/\s+/g, " ")
       .trim()
       .substring(0, 200); // Limit length
+
+    return sanitized;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
+
+    if (!window.electronAPI) {
+      setError(
+        "Electron API is not available. Please ensure the app is running in Electron."
+      );
+      setStatus("error");
+      return;
+    }
 
     // Validate inputs
     const start = startTime.trim() ? parseInt(startTime.trim(), 10) : null;
@@ -132,19 +156,30 @@ export default function App() {
       setStartTime("");
       setEndTime("");
     } catch (err) {
+      // Ignore cancellation errors - user already canceled
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (errorMessage.includes("Download canceled by user") || errorMessage.includes("canceled by user")) {
+        return;
+      }
       setStatus("error");
-      setError(
-        err instanceof Error ? err.message : "An unknown error occurred"
-      );
+      setError(errorMessage);
     }
   };
 
   const handleCancel = async () => {
+    if (!window.electronAPI) {
+      return;
+    }
     try {
       await window.electronAPI.cancelDownload();
       setStatus("idle");
       setProgress(0);
       setError(null);
+      setUrl("");
+      setStartTime("");
+      setEndTime("");
+      setVideoInfo(null);
+      setSuccessMessage(null);
     } catch (err) {
       console.error("Failed to cancel download:", err);
     }
@@ -325,4 +360,3 @@ export default function App() {
     </div>
   );
 }
-

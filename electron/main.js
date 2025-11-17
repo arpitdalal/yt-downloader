@@ -11,6 +11,7 @@ const __dirname = dirname(__filename);
 // Keep a global reference of the window object
 let mainWindow = null;
 let currentDownloadProcess = null;
+let isDownloadCanceled = false;
 
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
@@ -20,9 +21,13 @@ async function waitForDevServer(maxAttempts = 30) {
     let attempts = 0;
     const checkServer = () => {
       attempts++;
-      const req = http.request("http://localhost:5173", { method: "HEAD" }, (res) => {
-        resolve();
-      });
+      const req = http.request(
+        "http://localhost:5173",
+        { method: "HEAD" },
+        (res) => {
+          resolve();
+        }
+      );
       req.on("error", () => {
         if (attempts >= maxAttempts) {
           reject(new Error("Dev server did not start in time"));
@@ -37,9 +42,14 @@ async function waitForDevServer(maxAttempts = 30) {
 }
 
 async function createWindow() {
+  const iconPath = isDev
+    ? join(process.cwd(), "build", "icons", "icon.png")
+    : join(__dirname, "..", "build", "icons", "icon.png");
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: iconPath,
     webPreferences: {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -55,7 +65,9 @@ async function createWindow() {
       mainWindow.webContents.openDevTools();
     } catch (error) {
       console.error("Failed to connect to dev server:", error);
-      mainWindow.loadURL("data:text/html,<h1>Dev server not available</h1><p>Please start the dev server with: pnpm dev:renderer</p>");
+      mainWindow.loadURL(
+        "data:text/html,<h1>Dev server not available</h1><p>Please start the dev server with: pnpm dev:renderer</p>"
+      );
     }
   } else {
     // In production, load from built files
@@ -64,7 +76,9 @@ async function createWindow() {
       mainWindow.loadFile(indexPath);
     } else {
       console.error("Production build not found at:", indexPath);
-      mainWindow.loadURL("data:text/html,<h1>Build not found</h1><p>Please run: pnpm build</p>");
+      mainWindow.loadURL(
+        "data:text/html,<h1>Build not found</h1><p>Please run: pnpm build</p>"
+      );
     }
   }
 
@@ -202,6 +216,9 @@ ipcMain.handle("download-video", async (event, options) => {
   const { url, savePath, startTime, endTime } = options;
 
   return new Promise((resolve, reject) => {
+    // Reset cancellation flag
+    isDownloadCanceled = false;
+
     // Kill any existing download process
     if (currentDownloadProcess) {
       currentDownloadProcess.kill();
@@ -272,6 +289,12 @@ ipcMain.handle("download-video", async (event, options) => {
     pythonProcess.on("close", (code) => {
       currentDownloadProcess = null;
 
+      // Check if download was canceled by user
+      if (isDownloadCanceled) {
+        reject(new Error("Download canceled by user"));
+        return;
+      }
+
       if (code === 0) {
         try {
           // Extract JSON from stdout
@@ -320,6 +343,7 @@ ipcMain.handle("download-video", async (event, options) => {
 // IPC: Cancel download
 ipcMain.handle("cancel-download", async () => {
   if (currentDownloadProcess) {
+    isDownloadCanceled = true;
     currentDownloadProcess.kill();
     currentDownloadProcess = null;
     return { success: true };

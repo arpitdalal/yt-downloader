@@ -42,28 +42,35 @@ This creates the `dist/` directory with the built React app.
 
 ### Step 2: Bundle Python and FFmpeg
 
-The app requires Python and ffmpeg to be bundled. For now, this is done manually:
+**⚠️ IMPORTANT**: The app requires Python runtime and FFmpeg to be bundled for production builds. Without these, the app will not work on end-user machines.
 
 #### Option A: Use System Python/FFmpeg (Development)
 
 In development, the app uses system Python and ffmpeg. Make sure they're in your PATH.
 
-#### Option B: Bundle Python and FFmpeg (Production)
+#### Option B: Bundle Python and FFmpeg (Production - Windows)
 
-1. **Python**: 
-   - Option 1: Use PyInstaller to create a standalone Python executable
-   - Option 2: Bundle a portable Python runtime
-   - Place Python executable in `resources/python/` directory
+**For Windows builds**, you have two options:
 
-2. **FFmpeg**:
-   - Download platform-specific ffmpeg binaries
-   - Place ffmpeg executable in `resources/ffmpeg/` directory
-   - For Mac: `resources/ffmpeg/ffmpeg`
-   - For Windows: `resources/ffmpeg/ffmpeg.exe`
+**Option 1: Manual (Local Build)**
+1. Run the bundling script:
+   ```powershell
+   .\scripts\bundle-dependencies-windows.ps1
+   ```
+2. Follow the instructions to download and place:
+   - Python embeddable package → `resources/python/python.exe`
+   - FFmpeg → `resources/ffmpeg/ffmpeg.exe`
+   - The script will copy `downloader.py` automatically
 
-3. **Python Script**:
-   - Copy `python/downloader.py` to `resources/python/downloader.py`
-   - Ensure all Python dependencies are installed in the bundled Python environment
+**Option 2: Automated (GitHub Actions)**
+- The GitHub Actions workflow automatically bundles Python and FFmpeg
+- No manual steps needed when using CI/CD
+
+**What gets bundled:**
+- ✅ Python embeddable runtime (`python.exe`)
+- ✅ pip and yt-dlp (installed in Python environment)
+- ✅ FFmpeg executable (`ffmpeg.exe`)
+- ✅ Python script (`downloader.py`)
 
 ### Step 3: Build Electron App
 

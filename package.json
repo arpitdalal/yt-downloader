@@ -1,5 +1,8 @@
 {
   "name": "yt-downloader",
+  "version": "1.0.0",
+  "description": "YouTube Downloader Application",
+  "author": "Arpit Dalal <arpitdalalm@gmail.com>",
   "private": true,
   "type": "module",
   "main": "electron/main.js",
@@ -10,6 +13,10 @@
     "build": "vite build",
     "electron:dev": "NODE_ENV=development electron .",
     "electron:build": "vite build && electron-builder",
+    "electron:build:win": "vite build && electron-builder --win",
+    "electron:build:win-x64": "vite build && electron-builder --win --x64",
+    "electron:build:win-x86": "vite build && electron-builder --win --ia32",
+    "electron:build:win-arm64": "vite build && electron-builder --win --arm64",
     "typecheck": "tsc",
     "python:install": "pip install -r python/requirements.txt",
     "python:typecheck": "mypy python/"
@@ -47,13 +54,29 @@
       {
         "from": "python",
         "to": "python"
+      },
+      {
+        "from": "resources/ffmpeg",
+        "to": "ffmpeg",
+        "filter": ["**/*"]
       }
     ],
+    "icon": "build/icons/icon.png",
     "mac": {
+      "icon": "build/icons/icon.icns",
       "category": "public.app-category.utilities"
     },
     "win": {
-      "target": "nsis"
+      "icon": "build/icons/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64", "x86", "arm64"]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "build/icons/icon_512x512.png"
     }
   }
 }
