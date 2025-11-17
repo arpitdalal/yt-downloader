@@ -39,6 +39,48 @@ export default function App() {
     };
   }, [status]);
 
+  const getErrorMessage = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+
+    // Map technical errors to user-friendly messages
+    if (message.includes("Invalid input")) {
+      if (message.includes("URL")) {
+        return "Please enter a valid YouTube URL.";
+      }
+      if (message.includes("Save path")) {
+        return "Please select a valid save location.";
+      }
+      if (message.includes("time")) {
+        return "Please enter valid time values (non-negative integers).";
+      }
+      return "Please check your input and try again.";
+    }
+    if (message.includes("Failed to start Python process") || message.includes("Configuration error")) {
+      return "Unable to start download process. Please ensure the application is properly installed.";
+    }
+    if (message.includes("403") || message.includes("Forbidden")) {
+      return "This video is not available for download. It may be restricted, private, or region-locked.";
+    }
+    if (message.includes("format is not available") || message.includes("Requested format")) {
+      return "The requested video quality is not available. Please try again.";
+    }
+    if (message.includes("disk space") || message.includes("No space")) {
+      return "Not enough disk space. Please free up space and try again.";
+    }
+    if (message.includes("Failed to extract video information")) {
+      return "Unable to get video information. Please check the URL and try again.";
+    }
+    if (message.includes("Download process failed")) {
+      return "Download failed. The video may be unavailable or there was a network error. Please try again.";
+    }
+    if (message.includes("Invalid YouTube URL")) {
+      return "Please enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...).";
+    }
+
+    // Return original message if no mapping found
+    return message || "An unexpected error occurred. Please try again.";
+  };
+
   const sanitizeFilename = (filename: string): string => {
     // Remove emojis and other special Unicode characters
     // Emoji ranges: U+1F300-U+1F9FF, U+2600-U+26FF, U+2700-U+27BF, U+FE00-U+FE0F, U+1F900-U+1F9FF, U+1F1E0-U+1F1FF
@@ -162,7 +204,7 @@ export default function App() {
         return;
       }
       setStatus("error");
-      setError(errorMessage);
+      setError(getErrorMessage(err));
     }
   };
 

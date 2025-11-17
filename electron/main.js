@@ -1,12 +1,17 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { spawn } from "child_process";
-import { join, dirname } from "path";
+import { join, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 import os from "os";
+import log from "electron-log";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Configure logging
+log.transports.file.level = "info";
+log.transports.console.level = process.env.NODE_ENV === "development" ? "debug" : "info";
 
 // Keep a global reference of the window object
 let mainWindow = null;
@@ -54,8 +59,23 @@ async function createWindow() {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: true,
     },
   });
+
+  // Set Content Security Policy
+  mainWindow.webContents.session.webRequest.onHeadersReceived(
+    (details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          "Content-Security-Policy": [
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self';",
+          ],
+        },
+      });
+    }
+  );
 
   if (isDev) {
     // In development, wait for Vite dev server and load from it
@@ -64,7 +84,7 @@ async function createWindow() {
       await mainWindow.loadURL("http://localhost:5173");
       mainWindow.webContents.openDevTools();
     } catch (error) {
-      console.error("Failed to connect to dev server:", error);
+      log.error("Failed to connect to dev server", { error: error.message });
       mainWindow.loadURL(
         "data:text/html,<h1>Dev server not available</h1><p>Please start the dev server with: pnpm dev:renderer</p>"
       );
@@ -75,7 +95,7 @@ async function createWindow() {
     if (existsSync(indexPath)) {
       mainWindow.loadFile(indexPath);
     } else {
-      console.error("Production build not found at:", indexPath);
+      log.error("Production build not found", { path: indexPath });
       mainWindow.loadURL(
         "data:text/html,<h1>Build not found</h1><p>Please run: pnpm build</p>"
       );
@@ -86,6 +106,20 @@ async function createWindow() {
     mainWindow = null;
   });
 }
+
+// Cleanup on app exit
+app.on("before-quit", () => {
+  if (currentDownloadProcess) {
+    log.info("Killing active download process on app quit");
+    currentDownloadProcess.kill("SIGTERM");
+    // Give process 2 seconds to clean up
+    setTimeout(() => {
+      if (currentDownloadProcess) {
+        currentDownloadProcess.kill("SIGKILL");
+      }
+    }, 2000);
+  }
+});
 
 app.whenReady().then(async () => {
   await createWindow();
@@ -98,6 +132,11 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  // Cleanup before quit
+  if (currentDownloadProcess) {
+    currentDownloadProcess.kill("SIGTERM");
+  }
+
   if (process.platform !== "darwin") {
     app.quit();
   }
@@ -121,13 +160,73 @@ function getPythonPath() {
   }
 }
 
+// Validate YouTube URL
+function validateYouTubeUrl(url) {
+  if (typeof url !== "string" || !url.trim()) {
+    throw new Error("URL must be a non-empty string");
+  }
+
+  let urlObj;
+  try {
+    urlObj = new URL(url.trim());
+  } catch (e) {
+    throw new Error("Invalid URL format");
+  }
+
+  const allowedHosts = [
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtu.be",
+    "youtube-nocookie.com",
+  ];
+
+  const hostname = urlObj.hostname.replace(/^www\./, "");
+  if (!allowedHosts.includes(hostname)) {
+    throw new Error("URL must be a valid YouTube URL");
+  }
+
+  return url.trim();
+}
+
+// Validate save path
+function validateSavePath(savePath) {
+  if (typeof savePath !== "string" || !savePath.trim()) {
+    throw new Error("Save path must be a non-empty string");
+  }
+
+  const resolved = resolve(savePath);
+  const homeDir = os.homedir();
+
+  // Only allow saving to user's home directory or subdirectories
+  if (!resolved.startsWith(resolve(homeDir))) {
+    throw new Error("Save path must be within user home directory");
+  }
+
+  // Prevent path traversal
+  if (resolved.includes("..")) {
+    throw new Error("Invalid save path");
+  }
+
+  return resolved;
+}
+
 // Helper to get Python script path
 function getPythonScriptPath() {
+  let scriptPath;
   if (isDev) {
-    return join(process.cwd(), "python", "downloader.py");
+    scriptPath = join(process.cwd(), "python", "downloader.py");
   } else {
-    return join(process.resourcesPath, "python", "downloader.py");
+    scriptPath = join(process.resourcesPath, "python", "downloader.py");
   }
+
+  if (!existsSync(scriptPath)) {
+    const error = `Python script not found at: ${scriptPath}`;
+    log.error(error);
+    throw new Error(error);
+  }
+
+  return scriptPath;
 }
 
 // Helper to get ffmpeg path
@@ -150,10 +249,33 @@ function getFfmpegPath() {
 // IPC: Extract video info
 ipcMain.handle("extract-video-info", async (event, url) => {
   return new Promise((resolve, reject) => {
-    const pythonPath = getPythonPath();
-    const scriptPath = getPythonScriptPath();
+    let validatedUrl;
+    try {
+      validatedUrl = validateYouTubeUrl(url);
+    } catch (error) {
+      log.error("Invalid URL provided", { url, error: error.message });
+      reject(new Error(`Invalid input: ${error.message}`));
+      return;
+    }
 
-    const pythonProcess = spawn(pythonPath, [scriptPath, "--validate", url]);
+    const pythonPath = getPythonPath();
+    let scriptPath;
+    try {
+      scriptPath = getPythonScriptPath();
+    } catch (error) {
+      log.error("Python script not found", { error: error.message });
+      reject(new Error(`Configuration error: ${error.message}`));
+      return;
+    }
+
+    const pythonProcess = spawn(
+      pythonPath,
+      [scriptPath, "--validate", validatedUrl],
+      {
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      }
+    );
 
     let stdout = "";
     let stderr = "";
@@ -176,9 +298,19 @@ ipcMain.handle("extract-video-info", async (event, url) => {
             reject(new Error(result.error || "Failed to extract video info"));
           }
         } catch (error) {
+          log.error("Failed to parse video info", {
+            error: error.message,
+            stdout,
+            url: validatedUrl,
+          });
           reject(new Error(`Failed to parse video info: ${error.message}`));
         }
       } else {
+        log.error("Python process failed", {
+          code,
+          stderr,
+          url: validatedUrl,
+        });
         reject(
           new Error(`Python process failed: ${stderr || "Unknown error"}`)
         );
@@ -186,6 +318,12 @@ ipcMain.handle("extract-video-info", async (event, url) => {
     });
 
     pythonProcess.on("error", (error) => {
+      log.error("Failed to start Python process", {
+        error: error.message,
+        url: validatedUrl,
+        pythonPath,
+        scriptPath,
+      });
       reject(new Error(`Failed to start Python process: ${error.message}`));
     });
   });
@@ -216,19 +354,78 @@ ipcMain.handle("download-video", async (event, options) => {
   const { url, savePath, startTime, endTime } = options;
 
   return new Promise((resolve, reject) => {
+    // Validate inputs
+    let validatedUrl, validatedPath;
+    try {
+      validatedUrl = validateYouTubeUrl(url);
+      validatedPath = validateSavePath(savePath);
+
+      // Validate time parameters
+      if (startTime !== null && startTime !== undefined) {
+        if (
+          typeof startTime !== "number" ||
+          startTime < 0 ||
+          !Number.isInteger(startTime)
+        ) {
+          throw new Error("Start time must be a non-negative integer");
+        }
+      }
+
+      if (endTime !== null && endTime !== undefined) {
+        if (
+          typeof endTime !== "number" ||
+          endTime < 0 ||
+          !Number.isInteger(endTime)
+        ) {
+          throw new Error("End time must be a non-negative integer");
+        }
+      }
+
+      if (
+        startTime !== null &&
+        endTime !== null &&
+        startTime >= endTime
+      ) {
+        throw new Error("End time must be greater than start time");
+      }
+    } catch (error) {
+      log.error("Invalid input for download", {
+        error: error.message,
+        url,
+        savePath,
+        startTime,
+        endTime,
+      });
+      reject(new Error(`Invalid input: ${error.message}`));
+      return;
+    }
+
     // Reset cancellation flag
     isDownloadCanceled = false;
 
     // Kill any existing download process
     if (currentDownloadProcess) {
+      log.info("Killing existing download process");
       currentDownloadProcess.kill();
       currentDownloadProcess = null;
     }
 
     const pythonPath = getPythonPath();
-    const scriptPath = getPythonScriptPath();
+    let scriptPath;
+    try {
+      scriptPath = getPythonScriptPath();
+    } catch (error) {
+      log.error("Python script not found", { error: error.message });
+      reject(new Error(`Configuration error: ${error.message}`));
+      return;
+    }
 
-    const args = [scriptPath, url, "false", "bestvideo+bestaudio/best"];
+    const args = [
+      scriptPath,
+      validatedUrl,
+      "false",
+      "bestvideo+bestaudio/best",
+    ];
 
     // Add start and end times if provided (Python script expects them in order)
     if (startTime !== null && startTime !== undefined) {
@@ -244,9 +441,19 @@ ipcMain.handle("download-video", async (event, options) => {
     }
 
     // Add output path (required)
-    args.push(savePath);
+    args.push(validatedPath);
 
-    const pythonProcess = spawn(pythonPath, args);
+    log.info("Starting download", {
+      url: validatedUrl,
+      savePath: validatedPath,
+      startTime,
+      endTime,
+    });
+
+    const pythonProcess = spawn(pythonPath, args, {
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     currentDownloadProcess = pythonProcess;
 
     let stdout = "";
@@ -282,6 +489,13 @@ ipcMain.handle("download-video", async (event, options) => {
           }
         } catch (e) {
           // Not JSON, ignore non-progress stderr output
+          // Log parsing errors for debugging
+          if (isDev) {
+            log.debug("Failed to parse progress line", {
+              line: line.trim(),
+              error: e.message,
+            });
+          }
         }
       }
     });
@@ -318,11 +532,22 @@ ipcMain.handle("download-video", async (event, options) => {
             reject(new Error(result.error_message || "Download failed"));
           }
         } catch (error) {
+          log.error("Failed to parse download result", {
+            error: error.message,
+            stdout,
+            url: validatedUrl,
+          });
           reject(
             new Error(`Failed to parse download result: ${error.message}`)
           );
         }
       } else {
+        log.error("Download process failed", {
+          code,
+          stderr,
+          url: validatedUrl,
+          savePath: validatedPath,
+        });
         reject(
           new Error(
             `Download process failed: ${
@@ -335,6 +560,13 @@ ipcMain.handle("download-video", async (event, options) => {
 
     pythonProcess.on("error", (error) => {
       currentDownloadProcess = null;
+      log.error("Failed to start download process", {
+        error: error.message,
+        url: validatedUrl,
+        savePath: validatedPath,
+        pythonPath,
+        scriptPath,
+      });
       reject(new Error(`Failed to start download process: ${error.message}`));
     });
   });

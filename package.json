@@ -22,15 +22,16 @@
     "python:typecheck": "mypy python/"
   },
   "dependencies": {
+    "electron-log": "^5.4.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.4",
-    "@vitejs/plugin-react": "^4.3.4",
     "@types/node": "^20",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
     "tailwindcss": "^4.1.4",
@@ -58,7 +59,9 @@
       {
         "from": "resources/ffmpeg",
         "to": "ffmpeg",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "icon": "build/icons/icon.png",
@@ -71,7 +74,11 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64", "x86", "arm64"]
+          "arch": [
+            "x64",
+            "x86",
+            "arm64"
+          ]
         }
       ]
     },
