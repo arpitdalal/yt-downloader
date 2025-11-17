@@ -43,7 +43,8 @@
     "appId": "com.ytdownloader.app",
     "productName": "YouTube Downloader",
     "directories": {
-      "output": "dist-electron"
+      "output": "dist-electron",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
@@ -76,7 +77,7 @@
           "target": "nsis",
           "arch": [
             "x64",
-            "x86",
+            "ia32",
             "arm64"
           ]
         }
