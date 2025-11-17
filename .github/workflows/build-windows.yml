@@ -37,25 +37,94 @@ jobs:
           New-Item -ItemType Directory -Force -Path resources/python | Out-Null
           New-Item -ItemType Directory -Force -Path resources/ffmpeg | Out-Null
           
-          # Download Python embeddable (adjust version/arch as needed)
-          $pythonArch = if ("${{ matrix.arch }}" -eq "x86") { "win32" } elseif ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "amd64" }
+          # Determine target Python architecture
+          $targetPythonArch = if ("${{ matrix.arch }}" -eq "x86") { "win32" } elseif ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "amd64" }
           $pythonVersion = "3.12.0"
-          $pythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-$pythonArch.zip"
+          $targetPythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-$targetPythonArch.zip"
           
-          Write-Host "Downloading Python embeddable..."
-          Invoke-WebRequest -Uri $pythonUrl -OutFile python-embed.zip
+          # Download target architecture Python
+          Write-Host "Downloading Python embeddable ($targetPythonArch)..."
+          Invoke-WebRequest -Uri $targetPythonUrl -OutFile python-embed.zip
           Expand-Archive -Path python-embed.zip -DestinationPath resources/python -Force
           Remove-Item python-embed.zip
           
-          # Install pip
-          Write-Host "Installing pip..."
-          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
-          & "resources/python/python.exe" get-pip.py
-          Remove-Item get-pip.py
+          # Configure Python to use Lib directory (uncomment import site in .pth file)
+          $pthFile = Get-ChildItem resources/python -Filter "python*._pth" | Select-Object -First 1
+          if ($pthFile) {
+            $content = Get-Content $pthFile.FullName
+            $content = $content | ForEach-Object { $_ -replace '^#import site$', 'import site' }
+            Set-Content -Path $pthFile.FullName -Value $content
+            Write-Host "Configured Python .pth file to import site"
+          }
           
-          # Install yt-dlp
-          Write-Host "Installing yt-dlp..."
-          & "resources/python/python.exe" -m pip install yt-dlp
+          # For x64 builds, we can install pip/yt-dlp directly
+          # For other architectures, we'll use system Python to prepare packages
+          if ("${{ matrix.arch }}" -eq "x64") {
+            # Install pip
+            Write-Host "Installing pip..."
+            Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
+            & "resources/python/python.exe" get-pip.py
+            Remove-Item get-pip.py
+            
+            # Install yt-dlp
+            Write-Host "Installing yt-dlp..."
+            & "resources/python/python.exe" -m pip install yt-dlp
+          } else {
+            # For cross-architecture builds, use system Python to download wheels
+            # Map architecture to pip platform tag
+            $pipPlatform = if ("${{ matrix.arch }}" -eq "x86") { "win32" } elseif ("${{ matrix.arch }}" -eq "arm64") { "win_arm64" } else { "win_amd64" }
+            Write-Host "Preparing packages for $targetPythonArch architecture (platform: $pipPlatform)..."
+            python -m pip install --upgrade pip wheel
+            python -m pip download --platform $pipPlatform --only-binary=:all: yt-dlp -d packages-temp
+            
+            # Use system Python to extract and install packages manually
+            # First, ensure we have the necessary structure
+            if (-not (Test-Path "resources/python/Lib")) {
+              New-Item -ItemType Directory -Force -Path "resources/python/Lib" | Out-Null
+            }
+            if (-not (Test-Path "resources/python/Lib/site-packages")) {
+              New-Item -ItemType Directory -Force -Path "resources/python/Lib/site-packages" | Out-Null
+            }
+            
+            # Download pip wheel for target architecture
+            python -m pip download --platform $pipPlatform --only-binary=:all: --no-deps pip setuptools wheel -d packages-temp
+            
+            # Extract and install all wheels
+            Write-Host "Extracting and installing wheels..."
+            $wheels = Get-ChildItem packages-temp -Filter "*.whl"
+            foreach ($wheel in $wheels) {
+              $extractDir = Join-Path packages-temp "extracted-$($wheel.BaseName)"
+              Expand-Archive -Path $wheel.FullName -DestinationPath $extractDir -Force
+              
+              # Copy package contents
+              $packageDirs = Get-ChildItem $extractDir -Directory | Where-Object { $_.Name -notlike "*.dist-info" -and $_.Name -notlike "*.data" }
+              foreach ($pkgDir in $packageDirs) {
+                $destPath = Join-Path "resources/python/Lib/site-packages" $pkgDir.Name
+                Copy-Item -Path $pkgDir.FullName -Destination $destPath -Recurse -Force
+              }
+              
+              # Copy .dist-info directories
+              $distInfoDirs = Get-ChildItem $extractDir -Directory | Where-Object { $_.Name -like "*.dist-info" }
+              foreach ($distInfo in $distInfoDirs) {
+                Copy-Item -Path $distInfo.FullName -Destination "resources/python/Lib/site-packages" -Recurse -Force
+              }
+              
+              # Handle .data directories (for scripts, etc.)
+              $dataDirs = Get-ChildItem $extractDir -Directory | Where-Object { $_.Name -like "*.data" }
+              foreach ($dataDir in $dataDirs) {
+                $scriptsDir = Join-Path $dataDir.FullName "scripts"
+                if (Test-Path $scriptsDir) {
+                  if (-not (Test-Path "resources/python/Scripts")) {
+                    New-Item -ItemType Directory -Force -Path "resources/python/Scripts" | Out-Null
+                  }
+                  Copy-Item -Path "$scriptsDir/*" -Destination "resources/python/Scripts" -Recurse -Force
+                }
+              }
+            }
+            
+            # Clean up
+            Remove-Item -Recurse -Force packages-temp
+          }
           
           # Copy downloader.py
           Copy-Item python/downloader.py resources/python/downloader.py
