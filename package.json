@@ -2,42 +2,58 @@
   "name": "yt-downloader",
   "private": true,
   "type": "module",
+  "main": "electron/main.js",
   "scripts": {
-    "build": "react-router build",
-    "dev": "react-router dev",
-    "start": "react-router-serve ./build/server/index.js",
-    "typecheck": "react-router typegen && tsc",
+    "dev": "vite",
+    "dev:renderer": "vite",
+    "dev:main": "vite & NODE_ENV=development electron .",
+    "build": "vite build",
+    "electron:dev": "NODE_ENV=development electron .",
+    "electron:build": "vite build && electron-builder",
+    "typecheck": "tsc",
     "python:install": "pip install -r python/requirements.txt",
-    "python:typecheck": "mypy python/",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:studio": "prisma studio",
-    "db:seed": "tsx scripts/seed.ts"
+    "python:typecheck": "mypy python/"
   },
   "dependencies": {
-    "@react-router/node": "^7.7.1",
-    "@react-router/serve": "^7.7.1",
-    "isbot": "^5.1.27",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router": "^7.7.1",
-    "@prisma/client": "^5.22.0",
-    "zod": "^3.23.8",
-    "form-data": "^4.0.0",
-    "uuid": "^11.0.0"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@react-router/dev": "^7.7.1",
     "@tailwindcss/vite": "^4.1.4",
+    "@vitejs/plugin-react": "^4.3.4",
     "@types/node": "^20",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
-    "@types/uuid": "^10.0.0",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
     "tailwindcss": "^4.1.4",
     "typescript": "^5.8.3",
     "vite": "^6.3.3",
-    "vite-tsconfig-paths": "^5.1.4",
-    "prisma": "^5.22.0",
-    "tsx": "^4.19.2"
+    "vite-tsconfig-paths": "^5.1.4"
+  },
+  "build": {
+    "appId": "com.ytdownloader.app",
+    "productName": "YouTube Downloader",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "python/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "python",
+        "to": "python"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": "nsis"
+    }
   }
 }

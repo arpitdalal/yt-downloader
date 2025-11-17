@@ -1,23 +1,24 @@
-# YouTube to OneDrive Downloader
+# YouTube Video Downloader
 
-A full-stack web application that allows users to download YouTube videos and automatically upload them to OneDrive. Built with React Router v7, Prisma ORM, and Python yt-dlp.
+A desktop application built with Electron that allows users to download YouTube videos with custom start and end times. Built with React, Electron, and Python yt-dlp.
 
 ## Features
 
-- 🎥 **YouTube Video Download**: Download videos, live streams, and scheduled content
-- 📁 **OneDrive Integration**: Automatic upload to OneDrive folder
-- 🔄 **Queue Management**: Handle multiple concurrent downloads
-- 📊 **Real-time Status**: Track download progress and queue position
-- 🎯 **Duplicate Detection**: Avoid re-downloading existing videos
-- 📱 **Responsive UI**: Modern, mobile-friendly interface
-- 🚀 **Cost-effective**: Optimized for Fly.io free tier
+- 🎥 **YouTube Video Download**: Download videos with custom quality selection
+- ✂️ **Video Cutting**: Specify start and end times to download specific segments
+- 📊 **Real-time Progress**: Track download progress with percentage and speed
+- 💾 **Save Dialog**: Choose where to save downloaded videos
+- 🎯 **Video Info Extraction**: Preview video information before downloading
+- 🚫 **Download Cancellation**: Cancel downloads in progress
+- 🖥️ **Cross-platform**: Works on Windows, macOS, and Linux
 
 ## Tech Stack
 
-- **Frontend**: React Router v7, TypeScript, Tailwind CSS
-- **Backend**: Node.js, Prisma ORM, SQLite
-- **Download Engine**: Python, yt-dlp
-- **Deployment**: Fly.io, Docker
+- **Frontend**: React 19, TypeScript, Tailwind CSS 4
+- **Desktop Framework**: Electron 33
+- **Build Tool**: Vite 6
+- **Download Engine**: Python 3, yt-dlp
+- **Video Processing**: FFmpeg (for video cutting)
 - **Package Manager**: pnpm
 
 ## Prerequisites
@@ -25,7 +26,7 @@ A full-stack web application that allows users to download YouTube videos and au
 - Node.js 20+
 - Python 3.11+
 - pnpm
-- Fly.io CLI (for deployment)
+- FFmpeg (for video cutting functionality)
 
 ## Local Development Setup
 
@@ -41,44 +42,50 @@ A full-stack web application that allows users to download YouTube videos and au
    pnpm python:install
    ```
 
-3. **Set up the database**:
-   ```bash
-   # Generate Prisma client
-   pnpm db:generate
-   
-   # Push schema to database
-   pnpm db:push
-   
-   # Seed with sample data (optional)
-   pnpm db:seed
-   ```
+3. **Install FFmpeg** (if not already installed):
+   - **macOS**: `brew install ffmpeg`
+   - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
+   - **Linux**: `sudo apt install ffmpeg` (Ubuntu/Debian) or `sudo yum install ffmpeg` (RHEL/CentOS)
 
 4. **Start the development server**:
    ```bash
-   pnpm dev
+   # Start Vite dev server and Electron app
+   pnpm dev:main
+   
+   # Or run them separately:
+   # Terminal 1: Start Vite dev server
+   pnpm dev:renderer
+   
+   # Terminal 2: Start Electron app
+   pnpm electron:dev
    ```
 
-5. **Open your browser**:
-   Navigate to `http://localhost:3000`
+5. **The Electron app will open automatically** with the development UI
 
-## Environment Variables
+## Building for Production
 
-Create a `.env` file in the root directory:
+1. **Build the application**:
+   ```bash
+   pnpm electron:build
+   ```
 
-```env
-DATABASE_URL="file:./data/downloads.db"
-NODE_ENV="development"
-MAX_CONCURRENT_DOWNLOADS="2"
-```
+2. **Output**: The built application will be in the `dist-electron` directory
+
+3. **Platform-specific builds**:
+   - The build process automatically detects your platform
+   - For cross-platform builds, use CI/CD or build on each target platform
 
 ## Usage
 
-1. **Add a YouTube URL**: Enter a valid YouTube URL in the input field
-2. **Configure download options**: 
-   - For live streams, choose whether to download from start or current point
-   - For scheduled videos, the app will wait until the stream starts
-3. **Monitor progress**: Track download status and queue position
-4. **Access files**: Completed downloads are automatically uploaded to OneDrive
+1. **Enter YouTube URL**: Paste a valid YouTube URL in the input field
+2. **Optional: Set time range**: 
+   - Enter start time (in seconds) to begin download from a specific point
+   - Enter end time (in seconds) to stop download at a specific point
+   - Leave empty to download the full video
+3. **Click Download**: The app will extract video information and show a save dialog
+4. **Choose save location**: Select where to save the downloaded video
+5. **Monitor progress**: Watch real-time download progress with percentage and speed
+6. **Cancel if needed**: Use the Cancel button to stop an in-progress download
 
 ## Project Structure
 
@@ -86,117 +93,73 @@ MAX_CONCURRENT_DOWNLOADS="2"
 yt-downloader/
 ├── app/
 │   ├── lib/                 # Shared utilities
-│   │   ├── db.ts           # Prisma database client
-│   │   ├── types.ts        # TypeScript type definitions
-│   │   ├── download-service.ts # Database operations
-│   │   └── worker.ts       # Background download processing
-│   ├── routes/             # React Router routes
-│   │   ├── _index.tsx      # Main home page
-│   │   ├── api.validate.ts # URL validation API
-│   │   └── api.status.ts   # Queue status API
-│   └── root.tsx            # Root component
+│   │   ├── electron-api.ts  # Electron IPC API types and wrapper
+│   │   └── types.ts         # TypeScript type definitions
+│   ├── App.tsx              # Main React component
+│   ├── main.tsx             # React entry point
+│   └── app.css              # Global styles
+├── electron/
+│   ├── main.js              # Electron main process
+│   └── preload.js           # Electron preload script
 ├── python/
-│   ├── downloader.py       # YouTube downloader (yt-dlp)
-│   └── requirements.txt    # Python dependencies
-├── prisma/
-│   └── schema.prisma       # Database schema
-├── scripts/
-│   └── seed.ts             # Database seeding
-├── data/                   # SQLite database (created automatically)
-├── fly.toml               # Fly.io configuration
-└── Dockerfile             # Docker configuration
+│   ├── downloader.py        # YouTube downloader (yt-dlp)
+│   └── requirements.txt     # Python dependencies
+├── public/                  # Static assets
+├── dist/                    # Built frontend (generated)
+├── dist-electron/           # Built Electron app (generated)
+├── vite.config.ts           # Vite configuration
+├── tsconfig.json            # TypeScript configuration
+└── package.json             # Dependencies and scripts
 ```
 
-## Database Schema
+## Architecture
 
-### Downloads Table
-- `id`: Primary key
-- `url`: YouTube URL
-- `title`: Video title
-- `status`: Download status (PENDING, DOWNLOADING, COMPLETED, FAILED)
-- `videoId`: YouTube video ID (unique)
-- `isLive`: Whether the video is live
-- `isScheduled`: Whether the video is scheduled
-- `filePath`: Local file path where video is stored
-- `fileSize`: File size in bytes
-- `errorMessage`: Error message if failed
-- `startTime`: Start time in seconds for video cutting (optional)
-- `endTime`: End time in seconds for video cutting (optional)
+### Electron IPC Communication
 
-### Queue Table
-- `id`: Primary key
-- `downloadId`: Foreign key to downloads
-- `priority`: Queue priority
-- `createdAt`: Queue entry timestamp
+The app uses Electron's IPC (Inter-Process Communication) to bridge the React frontend and Node.js main process:
 
-## Deployment to Fly.io
+- **Main Process** (`electron/main.js`): Handles file system operations, Python process spawning, and native dialogs
+- **Renderer Process** (`app/App.tsx`): React UI that communicates with main process via IPC
+- **Preload Script** (`electron/preload.js`): Safely exposes Electron APIs to the renderer
 
-1. **Install Fly.io CLI**:
-   ```bash
-   curl -L https://fly.io/install.sh | sh
-   ```
+### Download Flow
 
-2. **Login to Fly.io**:
-   ```bash
-   fly auth login
-   ```
+1. User enters YouTube URL and optional time range
+2. Frontend calls `extractVideoInfo` IPC handler
+3. Main process spawns Python script to extract video metadata
+4. User selects save location via native save dialog
+5. Frontend calls `downloadVideo` IPC handler
+6. Main process spawns Python script with yt-dlp
+7. Progress updates are streamed back via IPC events
+8. Completed file is saved to user-selected location
 
-3. **Create the app**:
-   ```bash
-   fly apps create yt-downloader
-   ```
+## Available Scripts
 
-4. **Create persistent volume**:
-   ```bash
-   fly volumes create downloads_data --size 3
-   ```
+- `pnpm dev` - Start Vite dev server only
+- `pnpm dev:renderer` - Start Vite dev server only
+- `pnpm dev:main` - Start Vite dev server and Electron app together
+- `pnpm electron:dev` - Start Electron app (assumes dev server is running)
+- `pnpm build` - Build frontend for production
+- `pnpm electron:build` - Build complete Electron app for distribution
+- `pnpm python:install` - Install Python dependencies
+- `pnpm python:typecheck` - Type check Python code with mypy
+- `pnpm typecheck` - Type check TypeScript code
 
-5. **Deploy**:
-   ```bash
-   fly deploy
-   ```
+## Development Notes
 
-6. **Open the app**:
-   ```bash
-   fly open
-   ```
+### Python Script Integration
 
-## Configuration
+The Python downloader script (`python/downloader.py`) is called via child process from the Electron main process. It communicates via:
+- **stdout**: JSON results (video info, download results)
+- **stderr**: JSON progress updates (percentage, speed, ETA)
 
-### Fly.io Resources (Free Tier)
-- **CPU**: 0.5 vCPU shared
-- **Memory**: 256MB RAM
-- **Storage**: 3GB persistent volume
-- **Bandwidth**: 160GB/month
+### Video Cutting
 
-### Concurrent Downloads
-The app is configured to handle 2 concurrent downloads by default. This can be adjusted by modifying:
-- `MAX_CONCURRENT_DOWNLOADS` environment variable
-- `MAX_CONCURRENT_DOWNLOADS` constant in `app/lib/worker.ts`
-
-## OneDrive Integration
-
-Currently, the app includes a placeholder for OneDrive integration. To implement full OneDrive support:
-
-1. **Set up Microsoft Graph API**:
-   - Register an application in Azure AD
-   - Get client ID and client secret
-   - Configure permissions for OneDrive
-
-2. **Implement upload function**:
-   - Replace the placeholder in `app/lib/worker.ts`
-   - Use Microsoft Graph API to upload files
-   - Generate sharing links
-
-## Monitoring and Logs
-
-### View logs in Fly.io:
-```bash
-fly logs
-```
-
-### Monitor queue status:
-The app provides real-time queue status through the web interface and API endpoints.
+When start/end times are specified:
+1. Full video is downloaded to a temporary location
+2. FFmpeg is used to cut the video segment
+3. Cut video is saved to user-selected location
+4. Temporary full video is automatically cleaned up
 
 ## Troubleshooting
 
@@ -207,34 +170,38 @@ The app provides real-time queue status through the web interface and API endpoi
    pnpm python:install
    ```
 
-2. **Database connection errors**:
-   ```bash
-   pnpm db:generate
-   pnpm db:push
-   ```
+2. **FFmpeg not found**:
+   - Ensure FFmpeg is installed and available in PATH
+   - For production builds, FFmpeg needs to be bundled with the app
 
 3. **Download failures**:
-   - Check if yt-dlp is up to date
+   - Check if yt-dlp is up to date: `pip install --upgrade yt-dlp`
    - Verify YouTube URL is accessible
    - Check available disk space
+   - Some videos may have format restrictions
 
-4. **Queue not processing**:
-   - Restart the application
-   - Check worker logs
-   - Verify database connectivity
+4. **Electron app won't start**:
+   - Ensure Vite dev server is running on port 5173 (for development)
+   - Check that all dependencies are installed: `pnpm install`
+   - Verify Python is accessible: `python3 --version`
 
-### Performance Optimization
+5. **Video cutting fails**:
+   - Ensure FFmpeg is installed and working: `ffmpeg -version`
+   - Check that start time is less than end time
+   - Verify the video format supports cutting
 
-- **Memory usage**: Monitor with `fly status`
-- **Storage cleanup**: Temporary files are automatically cleaned up
-- **Queue management**: Failed downloads are retried automatically
+### Production Build Issues
+
+- **Python not bundled**: Ensure Python script is included in `extraResources` in `package.json`
+- **FFmpeg not bundled**: FFmpeg needs to be included in the app bundle for production
+- **Large app size**: Consider using platform-specific builds to reduce size
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Add tests if applicable
+4. Test on your target platform(s)
 5. Submit a pull request
 
 ## License
@@ -245,9 +212,9 @@ This project is licensed under the MIT License.
 
 For issues and questions:
 1. Check the troubleshooting section
-2. Review Fly.io logs
+2. Review Electron console logs (View → Toggle Developer Tools)
 3. Open an issue on GitHub
 
 ---
 
-**Note**: This application is designed for internal use. Ensure compliance with YouTube's Terms of Service and OneDrive usage policies.
+**Note**: This application is designed for personal use. Ensure compliance with YouTube's Terms of Service when downloading content.
