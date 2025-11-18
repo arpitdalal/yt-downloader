@@ -141,10 +141,13 @@ class YouTubeDownloader:
     ) -> bool:
         """Cut video using ffmpeg"""
         try:
-            cmd = ['ffmpeg', '-i', input_path, '-c', 'copy']
+            cmd = ['ffmpeg']
             
+            # When using -c copy, -ss must be before -i for accurate seeking
             if start_time is not None:
                 cmd.extend(['-ss', str(start_time)])
+            
+            cmd.extend(['-i', input_path, '-c', 'copy'])
             
             if end_time is not None:
                 duration = end_time - (start_time or 0)
