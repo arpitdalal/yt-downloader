@@ -11,7 +11,8 @@ const __dirname = dirname(__filename);
 
 // Configure logging
 log.transports.file.level = "info";
-log.transports.console.level = process.env.NODE_ENV === "development" ? "debug" : "info";
+log.transports.console.level =
+  process.env.NODE_ENV === "development" ? "debug" : "info";
 
 // Keep a global reference of the window object
 let mainWindow = null;
@@ -281,16 +282,18 @@ ipcMain.handle("extract-video-info", async (event, url) => {
         validatePythonPath(pythonPath);
       }
     } catch (error) {
-      log.error("Python configuration error", { error: error.message, pythonPath });
+      log.error("Python configuration error", {
+        error: error.message,
+        pythonPath,
+      });
       reject(new Error(`Configuration error: ${error.message}`));
       return;
     }
 
     // On Windows, set working directory to Python directory for DLL loading
-    const pythonDir = !isDev && process.platform === "win32" 
-      ? dirname(pythonPath) 
-      : undefined;
-    
+    const pythonDir =
+      !isDev && process.platform === "win32" ? dirname(pythonPath) : undefined;
+
     const pythonProcess = spawn(
       pythonPath,
       [scriptPath, "--validate", validatedUrl],
@@ -355,7 +358,10 @@ ipcMain.handle("extract-video-info", async (event, url) => {
       let errorMessage = `Failed to start download process: ${error.message}`;
       if (error.code === "ENOENT") {
         errorMessage = `Python executable not found at: ${pythonPath}. Please ensure the application is properly installed.`;
-      } else if (error.code === "EACCES" || error.message.includes("permission")) {
+      } else if (
+        error.code === "EACCES" ||
+        error.message.includes("permission")
+      ) {
         errorMessage = `Permission denied when trying to run Python at: ${pythonPath}. Please check file permissions.`;
       }
       reject(new Error(errorMessage));
@@ -415,11 +421,7 @@ ipcMain.handle("download-video", async (event, options) => {
         }
       }
 
-      if (
-        startTime !== null &&
-        endTime !== null &&
-        startTime >= endTime
-      ) {
+      if (startTime !== null && endTime !== null && startTime >= endTime) {
         throw new Error("End time must be greater than start time");
       }
     } catch (error) {
@@ -453,7 +455,10 @@ ipcMain.handle("download-video", async (event, options) => {
         validatePythonPath(pythonPath);
       }
     } catch (error) {
-      log.error("Python configuration error", { error: error.message, pythonPath });
+      log.error("Python configuration error", {
+        error: error.message,
+        pythonPath,
+      });
       reject(new Error(`Configuration error: ${error.message}`));
       return;
     }
@@ -490,14 +495,18 @@ ipcMain.handle("download-video", async (event, options) => {
     });
 
     // On Windows, set working directory to Python directory for DLL loading
-    const pythonDir = !isDev && process.platform === "win32" 
-      ? dirname(pythonPath) 
-      : undefined;
+    const pythonDir =
+      !isDev && process.platform === "win32" ? dirname(pythonPath) : undefined;
+
+    // Get ffmpeg path and pass it to Python script via environment variable
+    const ffmpegPath = getFfmpegPath();
+    const env = { ...process.env, FFMPEG_PATH: ffmpegPath };
 
     const pythonProcess = spawn(pythonPath, args, {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
       cwd: pythonDir, // Set working directory for Windows Python embeddable
+      env: env, // Pass ffmpeg path via environment variable
     });
     currentDownloadProcess = pythonProcess;
 
@@ -619,7 +628,10 @@ ipcMain.handle("download-video", async (event, options) => {
       let errorMessage = `Failed to start download process: ${error.message}`;
       if (error.code === "ENOENT") {
         errorMessage = `Python executable not found at: ${pythonPath}. Please ensure the application is properly installed.`;
-      } else if (error.code === "EACCES" || error.message.includes("permission")) {
+      } else if (
+        error.code === "EACCES" ||
+        error.message.includes("permission")
+      ) {
         errorMessage = `Permission denied when trying to run Python at: ${pythonPath}. Please check file permissions.`;
       }
       reject(new Error(errorMessage));

@@ -145,8 +145,11 @@ class YouTubeDownloader:
         end_time: Optional[int] = None
     ) -> bool:
         """Cut video using ffmpeg"""
+        # Get ffmpeg path from environment variable (set by Electron) or use 'ffmpeg' as fallback
+        ffmpeg_path = os.environ.get('FFMPEG_PATH', 'ffmpeg')
+        cmd = None
         try:
-            cmd = ['ffmpeg']
+            cmd = [ffmpeg_path]
             
             # When using -c copy, -ss must be before -i for accurate seeking
             if start_time is not None:
@@ -168,10 +171,24 @@ class YouTubeDownloader:
             )
             return True
         except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e.stderr.decode()}", file=sys.stderr)
+            error_output = e.stderr.decode() if e.stderr else str(e)
+            print(f"FFmpeg error: {error_output}", file=sys.stderr)
+            if cmd:
+                print(f"FFmpeg command: {' '.join(cmd)}", file=sys.stderr)
+            print(f"Input path: {input_path}", file=sys.stderr)
+            print(f"Output path: {output_path}", file=sys.stderr)
+            return False
+        except FileNotFoundError as e:
+            print(f"FFmpeg not found at: {ffmpeg_path}", file=sys.stderr)
+            print(f"Please ensure FFmpeg is installed or FFMPEG_PATH environment variable is set correctly", file=sys.stderr)
             return False
         except Exception as e:
             print(f"Error cutting video: {e}", file=sys.stderr)
+            print(f"FFmpeg path used: {ffmpeg_path}", file=sys.stderr)
+            if cmd:
+                print(f"FFmpeg command: {' '.join(cmd)}", file=sys.stderr)
+            print(f"Input path: {input_path}", file=sys.stderr)
+            print(f"Output path: {output_path}", file=sys.stderr)
             return False
     
     def download_video(
@@ -484,8 +501,30 @@ class YouTubeDownloader:
         
         # If start_time or end_time is provided, cut the video
         if needs_cut:
+            # Ensure output directory exists before cutting
+            try:
+                output_path_obj = Path(output_path)
+                output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                return DownloadResult(
+                    success=False,
+                    file_path=None,
+                    file_size=None,
+                    error_message=f"Failed to create output directory: {str(e)}",
+                    video_info=video_info
+                )
+            
             # Cut the video and save to user-specified output path
             if self.cut_video(original_file_path, output_path, start_time, end_time):
+                # Verify the cut file was created
+                if not Path(output_path).exists():
+                    return DownloadResult(
+                        success=False,
+                        file_path=None,
+                        file_size=None,
+                        error_message="Video cut completed but output file not found",
+                        video_info=video_info
+                    )
                 final_file_path = output_path
                 # Full video in temp directory is kept for future use (caching)
             else:
