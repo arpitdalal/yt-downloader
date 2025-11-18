@@ -10,6 +10,7 @@ import os
 import subprocess
 import time
 import tempfile
+import shutil
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -50,9 +51,13 @@ class YouTubeDownloader:
             self.output_dir = Path(output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
         else:
-            # Use /tmp for ephemeral storage (free on Fly.io, but lost on restart)
-            self.output_dir = Path("/tmp")
+            # Use OS-aware temp directory
+            self.output_dir = Path(tempfile.gettempdir())
             self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _get_temp_dir(self) -> Path:
+        """Get OS-aware temporary directory"""
+        return Path(tempfile.gettempdir())
         
     def extract_video_info(self, url: str) -> Optional[VideoInfo]:
         """Extract video information without downloading"""
@@ -97,8 +102,8 @@ class YouTubeDownloader:
             return None
     
     def _get_cached_video_path(self, video_id: str) -> Optional[str]:
-        """Check if a cached video exists in /tmp/ for the given video ID"""
-        temp_dir = Path("/tmp")
+        """Check if a cached video exists in temp directory for the given video ID"""
+        temp_dir = self._get_temp_dir()
         if not temp_dir.exists():
             return None
         
@@ -194,32 +199,23 @@ class YouTubeDownloader:
         # Check if we need to cut the video
         needs_cut = start_time is not None or end_time is not None
         
-        # Check for cached video if cuts are needed
-        cached_video_path = None
-        if needs_cut:
-            cached_video_path = self._get_cached_video_path(video_info.id)
-            if cached_video_path:
-                # Use cached video, skip download
-                original_file_path = cached_video_path
-            else:
-                # No cache found, will download below
-                original_file_path = None
+        # Always check for cached video first (regardless of whether cutting is needed)
+        cached_video_path = self._get_cached_video_path(video_info.id)
+        if cached_video_path:
+            # Use cached video, skip download
+            original_file_path = cached_video_path
         else:
+            # No cache found, will download below
             original_file_path = None
         
         # If we have a cached video, skip the download loop
         if cached_video_path:
-            # Skip to file verification and cutting
+            # Skip to file verification and cutting/moving
             pass
         else:
-            # Determine where to download the full video
-            if needs_cut:
-                # When cutting, download full video to /tmp/ directory with video ID
-                temp_dir = Path("/tmp")
-                download_output_path = str(temp_dir / f'{video_info.id}.%(ext)s')
-            else:
-                # When not cutting, download directly to user-specified output path
-                download_output_path = output_path
+            # Always download full video to temp directory with video ID for caching
+            temp_dir = self._get_temp_dir()
+            download_output_path = str(temp_dir / f'{video_info.id}.%(ext)s')
             
             # Format selectors to try in order (most preferred first)
             format_selectors = [
@@ -230,42 +226,53 @@ class YouTubeDownloader:
             ]
             
             last_error = None
+            # Track the final downloaded file path
+            downloaded_file_path = [None]
+            
             for format_selector in format_selectors:
-                # Progress hook to report download progress
+                # Progress hook to report download progress and capture final file path
                 def progress_hook(d):
-                    if d['status'] == 'downloading':
+                    status = d.get('status')
+                    
+                    # Capture final file path when download finishes
+                    if status == 'finished':
+                        filename = d.get('filename') or d.get('info_dict', {}).get('_filename')
+                        if filename:
+                            downloaded_file_path[0] = filename
+                    
+                    if status == 'downloading':
                         percent_float = None
-                    # Try to get percent from _percent_str first
-                    percent_str = d.get('_percent_str', '')
-                    if percent_str:
-                        try:
-                            percent_float = float(percent_str.strip('%'))
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    # If percent_str not available, calculate from bytes
-                    if percent_float is None:
-                        downloaded = d.get('downloaded_bytes')
-                        total = d.get('total_bytes')
-                        if downloaded is not None and total is not None and total > 0:
-                            percent_float = (downloaded / total) * 100
-                    
-                    progress_data = {
-                        'type': 'progress',
-                        'percent': percent_float,
-                        'downloaded_bytes': d.get('downloaded_bytes'),
-                        'total_bytes': d.get('total_bytes'),
-                        'speed': d.get('_speed_str', 'N/A'),
-                        'eta': d.get('_eta_str', 'N/A')
-                    }
-                    # Output progress as JSON to stderr (so it doesn't interfere with final JSON output)
-                    print(json.dumps(progress_data), file=sys.stderr, flush=True)
+                        # Try to get percent from _percent_str first
+                        percent_str = d.get('_percent_str', '')
+                        if percent_str:
+                            try:
+                                percent_float = float(percent_str.strip('%'))
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # If percent_str not available, calculate from bytes
+                        if percent_float is None:
+                            downloaded = d.get('downloaded_bytes')
+                            total = d.get('total_bytes')
+                            if downloaded is not None and total is not None and total > 0:
+                                percent_float = (downloaded / total) * 100
+                        
+                        progress_data = {
+                            'type': 'progress',
+                            'percent': percent_float,
+                            'downloaded_bytes': d.get('downloaded_bytes'),
+                            'total_bytes': d.get('total_bytes'),
+                            'speed': d.get('_speed_str', 'N/A'),
+                            'eta': d.get('_eta_str', 'N/A')
+                        }
+                        # Output progress as JSON to stderr (so it doesn't interfere with final JSON output)
+                        print(json.dumps(progress_data), file=sys.stderr, flush=True)
                 
                 # Common options to help with 403 errors and ensure complete downloads
                 base_opts = {
                     'outtmpl': download_output_path,
                     'format': format_selector,
-                    'progress_hooks': [progress_hook],  # Enable progress reporting
+                    'progress_hooks': [progress_hook],  # Enable progress reporting and capture final file path
                     'quiet': True,  # Suppress output
                     'no_warnings': True,  # Suppress warnings
                     'nocheckcertificate': True,  # Skip certificate checks
@@ -340,36 +347,41 @@ class YouTubeDownloader:
                 retry_delay = 1.0
                 
                 if needs_cut:
-                    # When cutting, search for file by video ID in /tmp/ directory
-                    search_dir = Path("/tmp")
-                    for attempt in range(max_retries):
-                        # Find the downloaded file (exclude .part files which are incomplete)
-                        downloaded_files = [
-                            f for f in search_dir.glob(f'{video_info.id}*')
-                            if not f.name.endswith('.part') and not f.name.endswith('.ytdl') and f.is_file()
-                            and not '_' in f.name  # Exclude cut files (they have _ in name)
-                        ]
-                        
-                        if downloaded_files:
-                            # Get the most recent complete file (in case of multiple files)
-                            original_file_path = str(max(downloaded_files, key=lambda f: f.stat().st_mtime))
-                            # Verify it's not a .part file by checking the actual filename
-                            if not original_file_path.endswith('.part') and not original_file_path.endswith('.ytdl'):
-                                # Verify file is not still being written (check if size is stable)
-                                file_path_obj = Path(original_file_path)
-                                if file_path_obj.exists():
-                                    size1 = file_path_obj.stat().st_size
-                                    time.sleep(0.2)
-                                    size2 = file_path_obj.stat().st_size
-                                    if size1 == size2 and size1 > 0:
-                                        break  # File size is stable, it's complete
-                        
-                        if attempt < max_retries - 1:
-                            time.sleep(retry_delay)
-                            retry_delay = min(retry_delay * 1.5, 3.0)  # Exponential backoff, max 3s
+                    # First, try to use the captured file path from postprocessor hook
+                    if downloaded_file_path[0] and Path(downloaded_file_path[0]).exists():
+                        original_file_path = downloaded_file_path[0]
+                    else:
+                        # Fallback: search for file by video ID in temp directory
+                        search_dir = self._get_temp_dir()
+                        for attempt in range(max_retries):
+                            # Find the downloaded file (exclude .part files which are incomplete)
+                            downloaded_files = [
+                                f for f in search_dir.glob(f'{video_info.id}*')
+                                if not f.name.endswith('.part') and not f.name.endswith('.ytdl') and f.is_file()
+                                and not '_' in f.name  # Exclude cut files (they have _ in name)
+                            ]
+                            
+                            if downloaded_files:
+                                # Get the most recent complete file (in case of multiple files)
+                                original_file_path = str(max(downloaded_files, key=lambda f: f.stat().st_mtime))
+                                # Verify it's not a .part file by checking the actual filename
+                                if not original_file_path.endswith('.part') and not original_file_path.endswith('.ytdl'):
+                                    # Verify file is not still being written (check if size is stable)
+                                    file_path_obj = Path(original_file_path)
+                                    if file_path_obj.exists():
+                                        size1 = file_path_obj.stat().st_size
+                                        time.sleep(0.2)
+                                        size2 = file_path_obj.stat().st_size
+                                        if size1 == size2 and size1 > 0:
+                                            break  # File size is stable, it's complete
+                            
+                            if attempt < max_retries - 1:
+                                time.sleep(retry_delay)
+                                retry_delay = min(retry_delay * 1.5, 3.0)  # Exponential backoff, max 3s
                     
-                    if not original_file_path:
+                    if not original_file_path or not Path(original_file_path).exists():
                         # Check if there are .part files (incomplete download)
+                        search_dir = self._get_temp_dir()
                         part_files = list(search_dir.glob(f'{video_info.id}*.part'))
                         if part_files:
                             return DownloadResult(
@@ -406,49 +418,44 @@ class YouTubeDownloader:
                     video_info=video_info
                 )
         
-        # When not cutting, file should be at output_path (or nearby with different extension)
+        # When not cutting, file is in temp directory - find it and move to user's location
         if not needs_cut:
-            output_path_obj = Path(output_path)
-            output_dir = output_path_obj.parent
-            output_stem = output_path_obj.stem  # filename without extension
-            max_retries = 10
-            retry_delay = 1.0
+            # First, try to use the captured file path from progress hook
+            if downloaded_file_path[0] and Path(downloaded_file_path[0]).exists():
+                original_file_path = downloaded_file_path[0]
+            else:
+                # Search for file by video ID in temp directory
+                search_dir = self._get_temp_dir()
+                for attempt in range(max_retries):
+                    # Find the downloaded file (exclude .part files which are incomplete)
+                    downloaded_files = [
+                        f for f in search_dir.glob(f'{video_info.id}*')
+                        if not f.name.endswith('.part') and not f.name.endswith('.ytdl') and f.is_file()
+                        and not '_' in f.name  # Exclude cut files (they have _ in name)
+                    ]
+                    
+                    if downloaded_files:
+                        # Get the most recent complete file (in case of multiple files)
+                        original_file_path = str(max(downloaded_files, key=lambda f: f.stat().st_mtime))
+                        # Verify it's not a .part file by checking the actual filename
+                        if not original_file_path.endswith('.part') and not original_file_path.endswith('.ytdl'):
+                            # Verify file is not still being written (check if size is stable)
+                            file_path_obj = Path(original_file_path)
+                            if file_path_obj.exists():
+                                size1 = file_path_obj.stat().st_size
+                                time.sleep(0.2)
+                                size2 = file_path_obj.stat().st_size
+                                if size1 == size2 and size1 > 0:
+                                    break  # File size is stable, it's complete
+                    
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 1.5, 3.0)  # Exponential backoff, max 3s
             
-            for attempt in range(max_retries):
-                # First, check if the exact output_path exists
-                if output_path_obj.exists() and not output_path_obj.name.endswith('.part') and not output_path_obj.name.endswith('.ytdl'):
-                    # Verify file is not still being written
-                    size1 = output_path_obj.stat().st_size
-                    time.sleep(0.2)
-                    size2 = output_path_obj.stat().st_size
-                    if size1 == size2 and size1 > 0:
-                        original_file_path = str(output_path_obj)
-                        break
-                
-                # Also check for files with same stem but different extension (yt-dlp might change extension)
-                matching_files = [
-                    f for f in output_dir.glob(f'{output_stem}.*')
-                    if not f.name.endswith('.part') and not f.name.endswith('.ytdl') and f.is_file()
-                ]
-                
-                if matching_files:
-                    # Get the most recent file
-                    candidate = max(matching_files, key=lambda f: f.stat().st_mtime)
-                    # Verify file is not still being written
-                    size1 = candidate.stat().st_size
-                    time.sleep(0.2)
-                    size2 = candidate.stat().st_size
-                    if size1 == size2 and size1 > 0:
-                        original_file_path = str(candidate)
-                        break
-                
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 1.5, 3.0)  # Exponential backoff, max 3s
-            
-            if not original_file_path:
+            if not original_file_path or not Path(original_file_path).exists():
                 # Check if there are .part files (incomplete download)
-                part_files = list(output_dir.glob(f'{output_stem}*.part'))
+                search_dir = self._get_temp_dir()
+                part_files = list(search_dir.glob(f'{video_info.id}*.part'))
                 if part_files:
                     return DownloadResult(
                         success=False,
@@ -480,7 +487,7 @@ class YouTubeDownloader:
             # Cut the video and save to user-specified output path
             if self.cut_video(original_file_path, output_path, start_time, end_time):
                 final_file_path = output_path
-                # Full video in /tmp/ is kept for future use (caching)
+                # Full video in temp directory is kept for future use (caching)
             else:
                 return DownloadResult(
                     success=False,
@@ -490,8 +497,25 @@ class YouTubeDownloader:
                     video_info=video_info
                 )
         else:
-            # No cutting needed, file is already at output_path
-            final_file_path = original_file_path
+            # No cutting needed, copy file from temp to user's requested location
+            # Keep original in temp for caching
+            try:
+                # Ensure output directory exists
+                output_path_obj = Path(output_path)
+                output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Copy file to user's location
+                shutil.copy2(original_file_path, output_path)
+                final_file_path = output_path
+                # Original file in temp directory is kept for future use (caching)
+            except Exception as e:
+                return DownloadResult(
+                    success=False,
+                    file_path=None,
+                    file_size=None,
+                    error_message=f"Failed to copy file to requested location: {str(e)}",
+                    video_info=video_info
+                )
         
         file_size = os.path.getsize(final_file_path)
         
