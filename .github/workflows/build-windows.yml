@@ -33,9 +33,8 @@ jobs:
       - name: Bundle Python and FFmpeg
         shell: pwsh
         run: |
-          # Create resources directories
-          New-Item -ItemType Directory -Force -Path resources/python | Out-Null
-          New-Item -ItemType Directory -Force -Path resources/ffmpeg | Out-Null
+          # Create resources directories (using prebuild script)
+          node scripts/prebuild.js
           
           # Determine target Python architecture
           $targetPythonArch = if ("${{ matrix.arch }}" -eq "x86") { "win32" } elseif ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "amd64" }

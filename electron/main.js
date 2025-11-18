@@ -160,6 +160,20 @@ function getPythonPath() {
   }
 }
 
+// Validate Python executable exists and is accessible
+function validatePythonPath(pythonPath) {
+  if (!existsSync(pythonPath)) {
+    const error = `Python executable not found at: ${pythonPath}`;
+    log.error(error, {
+      resourcesPath: process.resourcesPath,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    throw new Error(error);
+  }
+  return pythonPath;
+}
+
 // Validate YouTube URL
 function validateYouTubeUrl(url) {
   if (typeof url !== "string" || !url.trim()) {
@@ -262,18 +276,28 @@ ipcMain.handle("extract-video-info", async (event, url) => {
     let scriptPath;
     try {
       scriptPath = getPythonScriptPath();
+      // Validate Python exists before spawning
+      if (!isDev) {
+        validatePythonPath(pythonPath);
+      }
     } catch (error) {
-      log.error("Python script not found", { error: error.message });
+      log.error("Python configuration error", { error: error.message, pythonPath });
       reject(new Error(`Configuration error: ${error.message}`));
       return;
     }
 
+    // On Windows, set working directory to Python directory for DLL loading
+    const pythonDir = !isDev && process.platform === "win32" 
+      ? dirname(pythonPath) 
+      : undefined;
+    
     const pythonProcess = spawn(
       pythonPath,
       [scriptPath, "--validate", validatedUrl],
       {
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
+        cwd: pythonDir, // Set working directory for Windows Python embeddable
       }
     );
 
@@ -320,11 +344,21 @@ ipcMain.handle("extract-video-info", async (event, url) => {
     pythonProcess.on("error", (error) => {
       log.error("Failed to start Python process", {
         error: error.message,
+        errorCode: error.code,
         url: validatedUrl,
         pythonPath,
         scriptPath,
+        pythonExists: existsSync(pythonPath),
+        resourcesPath: process.resourcesPath,
       });
-      reject(new Error(`Failed to start Python process: ${error.message}`));
+      // Provide more helpful error message for common Windows issues
+      let errorMessage = `Failed to start download process: ${error.message}`;
+      if (error.code === "ENOENT") {
+        errorMessage = `Python executable not found at: ${pythonPath}. Please ensure the application is properly installed.`;
+      } else if (error.code === "EACCES" || error.message.includes("permission")) {
+        errorMessage = `Permission denied when trying to run Python at: ${pythonPath}. Please check file permissions.`;
+      }
+      reject(new Error(errorMessage));
     });
   });
 });
@@ -414,8 +448,12 @@ ipcMain.handle("download-video", async (event, options) => {
     let scriptPath;
     try {
       scriptPath = getPythonScriptPath();
+      // Validate Python exists before spawning
+      if (!isDev) {
+        validatePythonPath(pythonPath);
+      }
     } catch (error) {
-      log.error("Python script not found", { error: error.message });
+      log.error("Python configuration error", { error: error.message, pythonPath });
       reject(new Error(`Configuration error: ${error.message}`));
       return;
     }
@@ -448,11 +486,18 @@ ipcMain.handle("download-video", async (event, options) => {
       savePath: validatedPath,
       startTime,
       endTime,
+      pythonPath,
     });
+
+    // On Windows, set working directory to Python directory for DLL loading
+    const pythonDir = !isDev && process.platform === "win32" 
+      ? dirname(pythonPath) 
+      : undefined;
 
     const pythonProcess = spawn(pythonPath, args, {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
+      cwd: pythonDir, // Set working directory for Windows Python embeddable
     });
     currentDownloadProcess = pythonProcess;
 
@@ -562,12 +607,22 @@ ipcMain.handle("download-video", async (event, options) => {
       currentDownloadProcess = null;
       log.error("Failed to start download process", {
         error: error.message,
+        errorCode: error.code,
         url: validatedUrl,
         savePath: validatedPath,
         pythonPath,
         scriptPath,
+        pythonExists: existsSync(pythonPath),
+        resourcesPath: process.resourcesPath,
       });
-      reject(new Error(`Failed to start download process: ${error.message}`));
+      // Provide more helpful error message for common Windows issues
+      let errorMessage = `Failed to start download process: ${error.message}`;
+      if (error.code === "ENOENT") {
+        errorMessage = `Python executable not found at: ${pythonPath}. Please ensure the application is properly installed.`;
+      } else if (error.code === "EACCES" || error.message.includes("permission")) {
+        errorMessage = `Permission denied when trying to run Python at: ${pythonPath}. Please check file permissions.`;
+      }
+      reject(new Error(errorMessage));
     });
   });
 });

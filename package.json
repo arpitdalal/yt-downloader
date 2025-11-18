@@ -11,12 +11,13 @@
     "dev:renderer": "vite",
     "dev:main": "vite & NODE_ENV=development electron .",
     "build": "vite build",
+    "prebuild": "node scripts/prebuild.js",
     "electron:dev": "NODE_ENV=development electron .",
-    "electron:build": "vite build && electron-builder",
-    "electron:build:win": "vite build && electron-builder --win",
-    "electron:build:win-x64": "vite build && electron-builder --win --x64",
-    "electron:build:win-x86": "vite build && electron-builder --win --ia32",
-    "electron:build:win-arm64": "vite build && electron-builder --win --arm64",
+    "electron:build": "node scripts/prebuild.js && vite build && electron-builder",
+    "electron:build:win": "node scripts/prebuild.js && vite build && electron-builder --win",
+    "electron:build:win-x64": "node scripts/prebuild.js && vite build && electron-builder --win --x64",
+    "electron:build:win-x86": "node scripts/prebuild.js && vite build && electron-builder --win --ia32",
+    "electron:build:win-arm64": "node scripts/prebuild.js && vite build && electron-builder --win --arm64",
     "typecheck": "tsc",
     "python:install": "pip install -r python/requirements.txt",
     "python:typecheck": "mypy python/"
@@ -59,8 +60,11 @@
     ],
     "extraResources": [
       {
-        "from": "python",
-        "to": "python"
+        "from": "resources/python",
+        "to": "python",
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "resources/ffmpeg",
