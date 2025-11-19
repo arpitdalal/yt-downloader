@@ -216,6 +216,9 @@ class YouTubeDownloader:
         # Check if we need to cut the video
         needs_cut = start_time is not None or end_time is not None
         
+        # Track the final downloaded file path (initialize early so it's always available)
+        downloaded_file_path = [None]
+        
         # Always check for cached video first (regardless of whether cutting is needed)
         cached_video_path = self._get_cached_video_path(video_info.id)
         if cached_video_path:
@@ -243,8 +246,6 @@ class YouTubeDownloader:
             ]
             
             last_error = None
-            # Track the final downloaded file path
-            downloaded_file_path = [None]
             
             for format_selector in format_selectors:
                 # Progress hook to report download progress and capture final file path
