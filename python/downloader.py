@@ -219,6 +219,10 @@ class YouTubeDownloader:
         # Track the final downloaded file path (initialize early so it's always available)
         downloaded_file_path = [None]
         
+        # Initialize retry variables early so they're always available
+        max_retries = 10
+        retry_delay = 1.0
+        
         # Always check for cached video first (regardless of whether cutting is needed)
         cached_video_path = self._get_cached_video_path(video_info.id)
         if cached_video_path:
@@ -361,7 +365,7 @@ class YouTubeDownloader:
             try:
                 # Wait for file operations to complete and retry finding the file
                 # yt-dlp may still be renaming .part files to final names
-                max_retries = 10
+                # Reset retry_delay for this file finding operation
                 retry_delay = 1.0
                 
                 if needs_cut:
@@ -438,6 +442,9 @@ class YouTubeDownloader:
         
         # When not cutting, file is in temp directory - find it and move to user's location
         if not needs_cut:
+            # Reset retry_delay for this file finding operation
+            retry_delay = 1.0
+            
             # First, try to use the captured file path from progress hook
             if downloaded_file_path[0] and Path(downloaded_file_path[0]).exists():
                 original_file_path = downloaded_file_path[0]
