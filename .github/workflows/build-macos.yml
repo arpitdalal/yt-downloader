@@ -30,85 +30,104 @@ jobs:
       - name: Install dependencies
         run: pnpm install
       
+      - name: Install Homebrew dependencies
+        run: |
+          # Install FFmpeg via Homebrew (available on GitHub Actions runners)
+          brew install ffmpeg
+      
       - name: Bundle Python and FFmpeg
         run: |
-          # Create resources directories
-          node scripts/prebuild.js
+          # Use the bundling script approach (same as local builds)
+          # This ensures consistency and proper venv setup
           
-          # Determine Python architecture
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            PYTHON_ARCH="arm64"
-          else
-            PYTHON_ARCH="universal2"
-          fi
-          
-          # Download Python framework (using pyenv or direct download)
-          PYTHON_VERSION="3.12.0"
-          echo "Setting up Python $PYTHON_VERSION for $PYTHON_ARCH..."
-          
-          # Use Homebrew Python or download from python.org
-          # For CI, we'll use system Python and create a portable bundle
+          # Create resources directory structure
           mkdir -p resources/python
+          mkdir -p resources/ffmpeg
           
-          # Copy system Python (if available) or download
+          echo ""
+          echo "=== Step 1: Python ==="
+          echo "Setting up Python environment..."
+          
+          # Check if Python 3 is available
           if command -v python3 &> /dev/null; then
-            PYTHON_PATH=$(which python3)
-            echo "Using system Python: $PYTHON_PATH"
+            PYTHON_VERSION=$(python3 --version | cut -d' ' -f2)
+            echo "Found Python: $PYTHON_VERSION"
             
-            # Create a portable Python bundle
-            # For production, you might want to download Python framework from python.org
-            # For now, we'll create symlinks and bundle necessary files
-            cp -R $(python3 -c "import sys; print(sys.prefix)")/* resources/python/ 2>/dev/null || true
+            # Create a virtual environment
+            # Use --copies to avoid symlinks (better for app bundles)
+            python3 -m venv --copies resources/python
             
-            # Copy python3 binary
-            cp "$PYTHON_PATH" resources/python/python3 || ln -s "$PYTHON_PATH" resources/python/python3
+            # Install yt-dlp in the venv
+            echo "Installing yt-dlp..."
+            resources/python/bin/pip install --upgrade pip
+            resources/python/bin/pip install yt-dlp
+            
+            # CRITICAL: Fix pyvenv.cfg to use relative paths instead of hardcoded build machine paths
+            # This makes the venv portable across different machines
+            echo "Making venv portable..."
+            PYTHON_VERSION_SHORT=$(resources/python/bin/python3 --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
+            
+            # Update pyvenv.cfg to use relative paths
+            cat > resources/python/pyvenv.cfg <<EOF
+home = bin
+include-system-site-packages = false
+version = $PYTHON_VERSION_SHORT
+executable = bin/python3
+EOF
+            
+            # Fix all shebang lines in Python scripts to use relative paths
+            find resources/python/bin -type f -name "*.py" -exec sed -i '' "1s|^#!.*python.*|#!/usr/bin/env python3|" {} \;
+            find resources/python/bin -type f ! -name "*.py" -exec grep -l "^#!.*python" {} \; | while read script; do
+                sed -i '' "1s|^#!.*|#!/usr/bin/env python3|" "$script"
+            done
+            
+            # Ensure Python executable has correct permissions
+            chmod +x resources/python/bin/python3
+            
+            # Make sure all scripts are executable
+            find resources/python/bin -type f -exec chmod +x {} \;
+            
+            echo "✓ Python environment created and made portable"
           else
-            echo "Python3 not found, downloading..."
-            # Download Python from python.org
-            PYTHON_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-macos11.pkg"
-            # Note: This is a simplified approach. For production, you'd want to extract the framework
-            echo "Please ensure Python is installed on the system"
-          fi
-          
-          # Install yt-dlp in the bundled Python
-          if [ -f "resources/python/python3" ]; then
-            resources/python/python3 -m pip install --target resources/python/lib/python3.12/site-packages yt-dlp || \
-            python3 -m pip install --target resources/python/lib/python3.12/site-packages yt-dlp
-          else
-            python3 -m pip install --target resources/python/lib/python3.12/site-packages yt-dlp
+            echo "✗ Python 3 not found"
+            exit 1
           fi
           
           # Copy downloader.py
-          cp python/downloader.py resources/python/downloader.py
-          
-          # Download FFmpeg
-          echo "Downloading FFmpeg..."
-          mkdir -p resources/ffmpeg
-          
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            FFMPEG_ARCH="arm64"
+          if [ -f "python/downloader.py" ]; then
+            cp python/downloader.py resources/python/downloader.py
+            echo "✓ Copied downloader.py"
           else
-            FFMPEG_ARCH="x86_64"
+            echo "✗ downloader.py not found"
+            exit 1
           fi
           
-          # Download FFmpeg static build
-          FFMPEG_URL="https://evermeet.cx/ffmpeg/ffmpeg-${FFMPEG_ARCH}.zip"
-          curl -L -o ffmpeg.zip "$FFMPEG_URL" || {
-            echo "FFmpeg download failed, trying alternative source..."
-            # Alternative: use Homebrew version
-            if command -v brew &> /dev/null; then
-              brew install ffmpeg || true
-              cp $(which ffmpeg) resources/ffmpeg/ffmpeg || ln -s $(which ffmpeg) resources/ffmpeg/ffmpeg
-            fi
-          }
+          echo ""
+          echo "=== Step 2: FFmpeg ==="
+          echo "Setting up FFmpeg..."
           
-          if [ -f "ffmpeg.zip" ]; then
-            unzip -q ffmpeg.zip -d resources/ffmpeg/
-            rm ffmpeg.zip
+          # Check if FFmpeg is available (should be from Homebrew step)
+          if command -v ffmpeg &> /dev/null; then
+            FFMPEG_VERSION=$(ffmpeg -version | head -n1)
+            echo "Found FFmpeg: $FFMPEG_VERSION"
+            
+            # Copy system FFmpeg
+            cp $(which ffmpeg) resources/ffmpeg/ffmpeg
+            chmod +x resources/ffmpeg/ffmpeg
+            echo "✓ FFmpeg copied"
+          else
+            echo "✗ FFmpeg not found"
+            exit 1
           fi
           
-          # Make ffmpeg executable
-          chmod +x resources/ffmpeg/ffmpeg 2>/dev/null || true
+          echo ""
+          echo "=== Summary ==="
+          if [ -f "resources/python/bin/python3" ] && [ -f "resources/ffmpeg/ffmpeg" ] && [ -f "resources/python/downloader.py" ]; then
+            echo "✓ All dependencies ready for bundling!"
+          else
+            echo "✗ Some dependencies are missing"
+            exit 1
+          fi
       
       - name: Build app
         run: |

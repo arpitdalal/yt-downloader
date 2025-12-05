@@ -126,16 +126,63 @@ jobs:
           }
           
           # Copy downloader.py
-          Copy-Item python/downloader.py resources/python/downloader.py
+          if (Test-Path "python/downloader.py") {
+            Copy-Item python/downloader.py resources/python/downloader.py -Force
+            Write-Host "✓ Copied downloader.py"
+          } else {
+            Write-Host "✗ downloader.py not found"
+            exit 1
+          }
+          
+          # Verify Python setup
+          if (-not (Test-Path "resources/python/python.exe")) {
+            Write-Host "✗ Python not found after bundling"
+            exit 1
+          }
+          
+          Write-Host ""
+          Write-Host "=== Summary ==="
+          if ((Test-Path "resources/python/python.exe") -and (Test-Path "resources/ffmpeg/ffmpeg.exe") -and (Test-Path "resources/python/downloader.py")) {
+            Write-Host "✓ All dependencies ready for bundling!"
+          } else {
+            Write-Host "✗ Some dependencies are missing"
+            exit 1
+          }
           
           # Download FFmpeg
           Write-Host "Downloading FFmpeg..."
           $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-          Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
-          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp -Force
-          Copy-Item ffmpeg-temp/ffmpeg-*/bin/ffmpeg.exe resources/ffmpeg/ffmpeg.exe
-          Remove-Item -Recurse -Force ffmpeg-temp
-          Remove-Item ffmpeg.zip
+          
+          try {
+            Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip -ErrorAction Stop
+            Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp -Force
+            $ffmpegDir = Get-ChildItem ffmpeg-temp -Directory | Where-Object { $_.Name -like "ffmpeg-*" } | Select-Object -First 1
+            if ($ffmpegDir) {
+              Copy-Item "$($ffmpegDir.FullName)\bin\ffmpeg.exe" resources/ffmpeg/ffmpeg.exe -Force
+              Write-Host "✓ FFmpeg downloaded and extracted"
+            } else {
+              throw "FFmpeg directory not found in archive"
+            }
+            Remove-Item -Recurse -Force ffmpeg-temp
+            Remove-Item ffmpeg.zip
+          } catch {
+            Write-Host "FFmpeg download failed: $_"
+            Write-Host "Attempting to use system FFmpeg as fallback..."
+            if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+              $ffmpegPath = (Get-Command ffmpeg).Source
+              Copy-Item $ffmpegPath resources/ffmpeg/ffmpeg.exe -Force
+              Write-Host "✓ Copied system FFmpeg"
+            } else {
+              Write-Host "✗ FFmpeg not found and download failed"
+              exit 1
+            }
+          }
+          
+          # Verify FFmpeg exists
+          if (-not (Test-Path "resources/ffmpeg/ffmpeg.exe")) {
+            Write-Host "✗ FFmpeg not found after bundling"
+            exit 1
+          }
       
       - name: Build app
         shell: pwsh

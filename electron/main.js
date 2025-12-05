@@ -14,17 +14,17 @@ log.transports.file.level = "info";
 log.transports.console.level =
   process.env.NODE_ENV === "development" ? "debug" : "info";
 
-// Log file location for debugging (only in production)
-if (!isDev) {
-  console.log("Log file:", log.transports.file.getFile().path);
-}
-
 // Keep a global reference of the window object
 let mainWindow = null;
 let currentDownloadProcess = null;
 let isDownloadCanceled = false;
 
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
+
+// Log file location for debugging (only in production)
+if (!isDev) {
+  console.log("Log file:", log.transports.file.getFile().path);
+}
 
 async function waitForDevServer(maxAttempts = 30) {
   const http = await import("http");
@@ -502,11 +502,6 @@ ipcMain.handle("download-video", async (event, options) => {
       // Handle sections array (new format) or legacy startTime/endTime
 
       if (sections && Array.isArray(sections) && sections.length > 0) {
-        // Validate sections array
-        if (sections.length === 0) {
-          throw new Error("At least one section is required");
-        }
-
         sectionsArray = sections.map((section, index) => {
           const { start, end } = section;
 
