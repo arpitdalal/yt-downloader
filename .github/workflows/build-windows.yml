@@ -139,16 +139,7 @@ jobs:
             Write-Host "✗ Python not found after bundling"
             exit 1
           }
-          
-          Write-Host ""
-          Write-Host "=== Summary ==="
-          if ((Test-Path "resources/python/python.exe") -and (Test-Path "resources/ffmpeg/ffmpeg.exe") -and (Test-Path "resources/python/downloader.py")) {
-            Write-Host "✓ All dependencies ready for bundling!"
-          } else {
-            Write-Host "✗ Some dependencies are missing"
-            exit 1
-          }
-          
+
           # Download FFmpeg
           Write-Host "Downloading FFmpeg..."
           $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -183,6 +174,15 @@ jobs:
             Write-Host "✗ FFmpeg not found after bundling"
             exit 1
           }
+          
+          Write-Host ""
+          Write-Host "=== Summary ==="
+          if ((Test-Path "resources/python/python.exe") -and (Test-Path "resources/ffmpeg/ffmpeg.exe") -and (Test-Path "resources/python/downloader.py")) {
+            Write-Host "✓ All dependencies ready for bundling!"
+          } else {
+            Write-Host "✗ Some dependencies are missing"
+            exit 1
+          }
       
       - name: Build app
         shell: pwsh
@@ -199,4 +199,3 @@ jobs:
           name: windows-${{ matrix.arch }}
           path: dist-electron/*.exe
           retention-days: 30
-
