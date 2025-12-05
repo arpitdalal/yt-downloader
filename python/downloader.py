@@ -405,9 +405,14 @@ class YouTubeDownloader:
         cmd.extend(['-i', str(input_path), '-c', 'copy'])
         
         if end_time is not None:
-            duration = end_time - (start_time or 0)
+            # Calculate duration: if start_time is None, duration is just end_time
+            # Otherwise, duration is end_time - start_time
+            if start_time is not None:
+                duration = end_time - start_time
+            else:
+                duration = end_time
             if duration <= 0:
-                print(f"Invalid duration: start_time={start_time}, end_time={end_time}", file=sys.stderr)
+                print(f"Invalid duration: start_time={start_time}, end_time={end_time}, duration={duration}", file=sys.stderr)
                 return False
             cmd.extend(['-t', str(duration)])
         
@@ -445,6 +450,122 @@ class YouTubeDownloader:
             print(f"Output path: {output_path}", file=sys.stderr)
             return False
     
+    def cut_and_concatenate_sections(
+        self,
+        input_path: str,
+        sections: List[Tuple[Optional[int], Optional[int]]],
+        output_path: str,
+        video_id: str
+    ) -> bool:
+        """Cut multiple sections from video and concatenate them"""
+        # Validate input path
+        input_path_obj = Path(input_path)
+        if not input_path_obj.exists() or not input_path_obj.is_file():
+            print(f"Input file does not exist: {input_path}", file=sys.stderr)
+            return False
+        
+        # Validate output path
+        try:
+            self._validate_output_path(output_path)
+        except ValueError as e:
+            print(f"Invalid output path: {e}", file=sys.stderr)
+            return False
+        
+        # Get and validate ffmpeg path
+        ffmpeg_path = os.environ.get('FFMPEG_PATH', 'ffmpeg')
+        try:
+            ffmpeg_path = self._validate_ffmpeg_path(ffmpeg_path)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"FFmpeg validation error: {e}", file=sys.stderr)
+            return False
+        
+        temp_dir = self._get_temp_dir()
+        section_files: List[Path] = []
+        concat_file: Optional[Path] = None
+        
+        try:
+            # Cut each section to a temporary file
+            for index, (start_time, end_time) in enumerate(sections):
+                section_output = temp_dir / f'{video_id}_section_{index}.mp4'
+                
+                # Cut this section
+                if not self.cut_video(str(input_path), str(section_output), start_time, end_time):
+                    print(f"Failed to cut section {index + 1}", file=sys.stderr)
+                    return False
+                
+                # Verify section file was created
+                if not section_output.exists() or not self._is_valid_video_file(section_output):
+                    print(f"Section {index + 1} file is invalid or missing", file=sys.stderr)
+                    return False
+                
+                section_files.append(section_output)
+            
+            # Create concat file
+            concat_file = temp_dir / f'{video_id}_concat.txt'
+            with open(concat_file, 'w', encoding='utf-8') as f:
+                for section_file in section_files:
+                    # Use absolute path for ffmpeg concat format
+                    abs_path = section_file.resolve()
+                    # Convert to forward slashes for cross-platform compatibility
+                    # ffmpeg concat format expects forward slashes or escaped backslashes
+                    path_str = str(abs_path).replace('\\', '/')
+                    f.write(f"file '{path_str}'\n")
+            
+            # Concatenate all sections
+            cmd = [
+                ffmpeg_path,
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', str(concat_file),
+                '-c', 'copy',
+                str(output_path),
+                '-y'
+            ]
+            
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                    timeout=3600  # 1 hour timeout
+                )
+            except subprocess.TimeoutExpired:
+                print(f"FFmpeg concatenation timed out after 1 hour", file=sys.stderr)
+                return False
+            except subprocess.CalledProcessError as e:
+                error_output = e.stderr.decode('utf-8', errors='replace') if e.stderr else str(e)
+                print(f"FFmpeg concatenation error: {error_output}", file=sys.stderr)
+                return False
+            except FileNotFoundError:
+                print(f"FFmpeg not found at: {ffmpeg_path}", file=sys.stderr)
+                return False
+            except Exception as e:
+                print(f"Error concatenating sections: {e}", file=sys.stderr)
+                return False
+            
+            # Verify output file was created
+            if not Path(output_path).exists():
+                print(f"Concatenated output file not found", file=sys.stderr)
+                return False
+            
+            return True
+            
+        finally:
+            # Clean up temporary section files and concat file
+            for section_file in section_files:
+                try:
+                    if section_file.exists():
+                        section_file.unlink()
+                except Exception as e:
+                    print(f"Warning: Failed to delete section file {section_file}: {e}", file=sys.stderr)
+            
+            if concat_file and concat_file.exists():
+                try:
+                    concat_file.unlink()
+                except Exception as e:
+                    print(f"Warning: Failed to delete concat file {concat_file}: {e}", file=sys.stderr)
+    
     def download_video(
         self, 
         url: str, 
@@ -452,7 +573,8 @@ class YouTubeDownloader:
         download_from_start: bool = False,
         quality: str = 'bestvideo+bestaudio/best',
         start_time: Optional[int] = None,
-        end_time: Optional[int] = None
+        end_time: Optional[int] = None,
+        sections: Optional[List[Tuple[Optional[int], Optional[int]]]] = None
     ) -> DownloadResult:
         """Download a video from YouTube"""
         
@@ -492,7 +614,13 @@ class YouTubeDownloader:
             )
         
         # Check if we need to cut the video
-        needs_cut = start_time is not None or end_time is not None
+        # Use sections if provided, otherwise fall back to single start/end time
+        if sections and len(sections) > 0:
+            needs_cut = True
+            use_sections = True
+        else:
+            needs_cut = start_time is not None or end_time is not None
+            use_sections = False
         
         # Initialize progress tracker
         progress_tracker = DownloadProgressTracker()
@@ -731,15 +859,31 @@ class YouTubeDownloader:
                     video_info=video_info
                 )
             
-            # Cut the video and save to user-specified output path
-            if not self.cut_video(str(original_file_path), output_path, start_time, end_time):
-                return DownloadResult(
-                    success=False,
-                    file_path=None,
-                    file_size=None,
-                    error_message="Failed to cut video",
-                    video_info=video_info
-                )
+            if use_sections:
+                # Cut and concatenate multiple sections
+                if not self.cut_and_concatenate_sections(
+                    str(original_file_path),
+                    sections,
+                    output_path,
+                    video_info.id
+                ):
+                    return DownloadResult(
+                        success=False,
+                        file_path=None,
+                        file_size=None,
+                        error_message="Failed to cut and concatenate video sections",
+                        video_info=video_info
+                    )
+            else:
+                # Cut single section
+                if not self.cut_video(str(original_file_path), output_path, start_time, end_time):
+                    return DownloadResult(
+                        success=False,
+                        file_path=None,
+                        file_size=None,
+                        error_message="Failed to cut video",
+                        video_info=video_info
+                    )
             
             # Verify the cut file was created
             if not Path(output_path).exists():
@@ -885,27 +1029,76 @@ def main():
     quality = sys.argv[3] if len(sys.argv) > 3 else 'bestvideo+bestaudio/best'
     start_time = None
     end_time = None
+    sections = None
     output_path = None
     
-    # Parse arguments: [url, download_from_start, quality, start_time, end_time, output_path]
-    if len(sys.argv) > 4 and sys.argv[4] and sys.argv[4].strip():
-        try:
-            start_time = int(sys.argv[4])
-            if start_time < 0:
+    # Parse arguments: 
+    # Sections format (6 args): [script, url, download_from_start, quality, sections_json, output_path]
+    # Legacy format (7 args): [script, url, download_from_start, quality, start_time, end_time, output_path]
+    # Output path is always the last argument
+    if len(sys.argv) > 1:
+        output_path = sys.argv[-1].strip() if sys.argv[-1] else None
+    
+    # Determine format based on argument count and content
+    # Sections format has 6 args total (including script name), legacy has 7
+    # Also check if arg4 looks like JSON (starts with '[') to be more robust
+    if len(sys.argv) == 6:
+        # Sections format: arg4 is sections JSON
+        if len(sys.argv) > 4 and sys.argv[4] and sys.argv[4].strip():
+            arg4 = sys.argv[4].strip()
+            # Check if it looks like JSON (starts with '[')
+            if arg4.startswith('['):
+                try:
+                    parsed_sections = json.loads(arg4)
+                    if isinstance(parsed_sections, list) and len(parsed_sections) > 0:
+                        # Convert to list of tuples
+                        sections = [
+                            (
+                                section.get('start') if isinstance(section, dict) else None,
+                                section.get('end') if isinstance(section, dict) else None
+                            )
+                            for section in parsed_sections
+                        ]
+                    else:
+                        sys.stdout.write(json.dumps({
+                            'success': False,
+                            'error': 'Invalid sections format: empty list or not a list'
+                        }))
+                        sys.stdout.flush()
+                        sys.exit(1)
+                except (json.JSONDecodeError, ValueError, TypeError) as e:
+                    sys.stdout.write(json.dumps({
+                        'success': False,
+                        'error': f'Failed to parse sections JSON: {str(e)}'
+                    }))
+                    sys.stdout.flush()
+                    sys.exit(1)
+            else:
+                # Not JSON, treat as legacy format (single start_time)
+                try:
+                    start_time = int(arg4)
+                    if start_time < 0:
+                        start_time = None
+                except (ValueError, TypeError):
+                    start_time = None
+                # In this case, output_path is already set from sys.argv[-1]
+    elif len(sys.argv) >= 7:
+        # Legacy format: arg4 is start_time, arg5 is end_time
+        if len(sys.argv) > 4 and sys.argv[4] and sys.argv[4].strip():
+            try:
+                start_time = int(sys.argv[4])
+                if start_time < 0:
+                    start_time = None
+            except (ValueError, TypeError):
                 start_time = None
-        except (ValueError, TypeError):
-            start_time = None
-    
-    if len(sys.argv) > 5 and sys.argv[5] and sys.argv[5].strip():
-        try:
-            end_time = int(sys.argv[5])
-            if end_time < 0:
+        
+        if len(sys.argv) > 5 and sys.argv[5] and sys.argv[5].strip():
+            try:
+                end_time = int(sys.argv[5])
+                if end_time < 0:
+                    end_time = None
+            except (ValueError, TypeError):
                 end_time = None
-        except (ValueError, TypeError):
-            end_time = None
-    
-    if len(sys.argv) > 6 and sys.argv[6] and sys.argv[6].strip():
-        output_path = sys.argv[6].strip()
     
     if not output_path:
         sys.stdout.write(json.dumps({
@@ -948,7 +1141,7 @@ def main():
         sys.exit(0)
     
     # Download the video
-    result = downloader.download_video(url, output_path, download_from_start, quality, start_time, end_time)
+    result = downloader.download_video(url, output_path, download_from_start, quality, start_time, end_time, sections)
     
     # Output result as JSON
     output = {

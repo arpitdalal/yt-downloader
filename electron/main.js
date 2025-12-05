@@ -1,10 +1,10 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { spawn } from "child_process";
-import { join, dirname, resolve } from "path";
-import { fileURLToPath } from "url";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import log from "electron-log";
 import { existsSync } from "fs";
 import os from "os";
-import log from "electron-log";
+import { dirname, join, resolve } from "path";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -391,38 +391,137 @@ ipcMain.handle("show-save-dialog", async (event, options) => {
 
 // IPC: Download video
 ipcMain.handle("download-video", async (event, options) => {
-  const { url, savePath, startTime, endTime } = options;
+  const { url, savePath, startTime, endTime, sections } = options;
 
   return new Promise((resolve, reject) => {
     // Validate inputs
     let validatedUrl, validatedPath;
+    let sectionsArray = null; // Declare outside try block for proper scope
+
     try {
       validatedUrl = validateYouTubeUrl(url);
       validatedPath = validateSavePath(savePath);
 
-      // Validate time parameters
-      if (startTime !== null && startTime !== undefined) {
-        if (
-          typeof startTime !== "number" ||
-          startTime < 0 ||
-          !Number.isInteger(startTime)
-        ) {
-          throw new Error("Start time must be a non-negative integer");
-        }
-      }
+      // Handle sections array (new format) or legacy startTime/endTime
 
-      if (endTime !== null && endTime !== undefined) {
-        if (
-          typeof endTime !== "number" ||
-          endTime < 0 ||
-          !Number.isInteger(endTime)
-        ) {
-          throw new Error("End time must be a non-negative integer");
+      if (sections && Array.isArray(sections) && sections.length > 0) {
+        // Validate sections array
+        if (sections.length === 0) {
+          throw new Error("At least one section is required");
         }
-      }
 
-      if (startTime !== null && endTime !== null && startTime >= endTime) {
-        throw new Error("End time must be greater than start time");
+        sectionsArray = sections.map((section, index) => {
+          const { start, end } = section;
+
+          // Start time of subsequent sections cannot be empty
+          if (index > 0 && (start === null || start === undefined)) {
+            throw new Error(
+              `Start time of section ${index + 1} cannot be empty`
+            );
+          }
+
+          // End time of section with next section cannot be empty
+          if (
+            index < sections.length - 1 &&
+            (end === null || end === undefined)
+          ) {
+            throw new Error(
+              `End time of section ${
+                index + 1
+              } cannot be empty (it has a next section)`
+            );
+          }
+
+          // Validate start time if provided
+          if (start !== null && start !== undefined) {
+            if (
+              typeof start !== "number" ||
+              start < 0 ||
+              !Number.isInteger(start)
+            ) {
+              throw new Error(
+                `Start time of section ${
+                  index + 1
+                } must be a non-negative integer`
+              );
+            }
+          }
+
+          // Validate end time if provided
+          if (end !== null && end !== undefined) {
+            if (typeof end !== "number" || end < 0 || !Number.isInteger(end)) {
+              throw new Error(
+                `End time of section ${
+                  index + 1
+                } must be a non-negative integer`
+              );
+            }
+          }
+
+          // Validate start < end within section
+          if (
+            start !== null &&
+            start !== undefined &&
+            end !== null &&
+            end !== undefined &&
+            start >= end
+          ) {
+            throw new Error(
+              `End time must be greater than start time in section ${index + 1}`
+            );
+          }
+
+          // Validate ordering: next section's start must not be before current section's end
+          if (index < sections.length - 1) {
+            const nextSection = sections[index + 1];
+            const nextStart = nextSection.start;
+            if (
+              end !== null &&
+              end !== undefined &&
+              nextStart !== null &&
+              nextStart !== undefined &&
+              nextStart < end
+            ) {
+              throw new Error(
+                `Start time of section ${
+                  index + 2
+                } (${nextStart}s) cannot be before end time of section ${
+                  index + 1
+                } (${end}s)`
+              );
+            }
+          }
+
+          return { start, end };
+        });
+      } else {
+        // Legacy format: convert startTime/endTime to single section
+        if (startTime !== null && startTime !== undefined) {
+          if (
+            typeof startTime !== "number" ||
+            startTime < 0 ||
+            !Number.isInteger(startTime)
+          ) {
+            throw new Error("Start time must be a non-negative integer");
+          }
+        }
+
+        if (endTime !== null && endTime !== undefined) {
+          if (
+            typeof endTime !== "number" ||
+            endTime < 0 ||
+            !Number.isInteger(endTime)
+          ) {
+            throw new Error("End time must be a non-negative integer");
+          }
+        }
+
+        if (startTime !== null && endTime !== null && startTime >= endTime) {
+          throw new Error("End time must be greater than start time");
+        }
+
+        // Convert to sections array for backward compatibility
+        sectionsArray = [{ start: startTime ?? null, end: endTime ?? null }];
       }
     } catch (error) {
       log.error("Invalid input for download", {
@@ -431,6 +530,7 @@ ipcMain.handle("download-video", async (event, options) => {
         savePath,
         startTime,
         endTime,
+        sections,
       });
       reject(new Error(`Invalid input: ${error.message}`));
       return;
@@ -470,17 +570,22 @@ ipcMain.handle("download-video", async (event, options) => {
       "bestvideo+bestaudio/best",
     ];
 
-    // Add start and end times if provided (Python script expects them in order)
-    if (startTime !== null && startTime !== undefined) {
-      args.push(startTime.toString());
+    // Add sections as JSON string if provided, otherwise use legacy format
+    if (sectionsArray && sectionsArray.length > 0) {
+      args.push(JSON.stringify(sectionsArray));
     } else {
-      args.push(""); // Empty string if not provided
-    }
+      // Legacy format: add start and end times if provided
+      if (startTime !== null && startTime !== undefined) {
+        args.push(startTime.toString());
+      } else {
+        args.push(""); // Empty string if not provided
+      }
 
-    if (endTime !== null && endTime !== undefined) {
-      args.push(endTime.toString());
-    } else {
-      args.push(""); // Empty string if not provided
+      if (endTime !== null && endTime !== undefined) {
+        args.push(endTime.toString());
+      } else {
+        args.push(""); // Empty string if not provided
+      }
     }
 
     // Add output path (required)
@@ -489,8 +594,7 @@ ipcMain.handle("download-video", async (event, options) => {
     log.info("Starting download", {
       url: validatedUrl,
       savePath: validatedPath,
-      startTime,
-      endTime,
+      sections: sectionsArray,
       pythonPath,
     });
 

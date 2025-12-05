@@ -12,10 +12,11 @@ type DownloadStatus =
   | "completed"
   | "error";
 
+type Section = { start: string; end: string };
+
 export default function App() {
   const [url, setUrl] = useState("");
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
+  const [sections, setSections] = useState<Section[]>([{ start: "", end: "" }]);
   const [status, setStatus] = useState<DownloadStatus>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -55,13 +56,19 @@ export default function App() {
       }
       return "Please check your input and try again.";
     }
-    if (message.includes("Failed to start Python process") || message.includes("Configuration error")) {
+    if (
+      message.includes("Failed to start Python process") ||
+      message.includes("Configuration error")
+    ) {
       return "Unable to start download process. Please ensure the application is properly installed.";
     }
     if (message.includes("403") || message.includes("Forbidden")) {
       return "This video is not available for download. It may be restricted, private, or region-locked.";
     }
-    if (message.includes("format is not available") || message.includes("Requested format")) {
+    if (
+      message.includes("format is not available") ||
+      message.includes("Requested format")
+    ) {
       return "The requested video quality is not available. Please try again.";
     }
     if (message.includes("disk space") || message.includes("No space")) {
@@ -106,6 +113,93 @@ export default function App() {
     return sanitized;
   };
 
+  const addSection = () => {
+    setSections([...sections, { start: "", end: "" }]);
+  };
+
+  const removeSection = (index: number) => {
+    if (sections.length > 1) {
+      setSections(sections.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateSection = (
+    index: number,
+    field: "start" | "end",
+    value: string
+  ) => {
+    const newSections = [...sections];
+    newSections[index] = { ...newSections[index], [field]: value };
+    setSections(newSections);
+  };
+
+  const validateSections = (): string | null => {
+    // At least one section required
+    if (sections.length === 0) {
+      return "At least one section is required";
+    }
+
+    // Validate each section
+    for (let i = 0; i < sections.length; i++) {
+      const section = sections[i];
+      const start = section.start.trim()
+        ? parseInt(section.start.trim(), 10)
+        : null;
+      const end = section.end.trim() ? parseInt(section.end.trim(), 10) : null;
+
+      // Start time of subsequent sections cannot be empty
+      if (i > 0 && start === null) {
+        return `Start time of section ${i + 1} cannot be empty`;
+      }
+
+      // End time of section with next section cannot be empty
+      if (i < sections.length - 1 && end === null) {
+        return `End time of section ${
+          i + 1
+        } cannot be empty (it has a next section)`;
+      }
+
+      // Validate start time if provided
+      if (start !== null) {
+        if (isNaN(start) || start < 0) {
+          return `Start time of section ${
+            i + 1
+          } must be a valid positive number`;
+        }
+      }
+
+      // Validate end time if provided
+      if (end !== null) {
+        if (isNaN(end) || end < 0) {
+          return `End time of section ${i + 1} must be a valid positive number`;
+        }
+      }
+
+      // Validate start < end within section
+      if (start !== null && end !== null && start >= end) {
+        return `End time must be greater than start time in section ${i + 1}`;
+      }
+
+      // Validate ordering: next section's start must not be before current section's end
+      if (i < sections.length - 1) {
+        const nextSection = sections[i + 1];
+        const nextStart = nextSection.start.trim()
+          ? parseInt(nextSection.start.trim(), 10)
+          : null;
+
+        if (end !== null && nextStart !== null && nextStart < end) {
+          return `Start time of section ${
+            i + 2
+          } (${nextStart}s) cannot be before end time of section ${
+            i + 1
+          } (${end}s)`;
+        }
+      }
+    }
+
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
@@ -118,24 +212,10 @@ export default function App() {
       return;
     }
 
-    // Validate inputs
-    const start = startTime.trim() ? parseInt(startTime.trim(), 10) : null;
-    const end = endTime.trim() ? parseInt(endTime.trim(), 10) : null;
-
-    if (start !== null && (isNaN(start) || start < 0)) {
-      setError("Start time must be a valid positive number");
-      setStatus("error");
-      return;
-    }
-
-    if (end !== null && (isNaN(end) || end < 0)) {
-      setError("End time must be a valid positive number");
-      setStatus("error");
-      return;
-    }
-
-    if (start !== null && end !== null && start >= end) {
-      setError("End time must be greater than start time");
+    // Validate sections
+    const validationError = validateSections();
+    if (validationError) {
+      setError(validationError);
       setStatus("error");
       return;
     }
@@ -180,11 +260,16 @@ export default function App() {
       setStatus("downloading");
       setProgress(0);
 
+      // Convert sections to format expected by backend
+      const sectionsArray = sections.map((s) => ({
+        start: s.start.trim() ? parseInt(s.start.trim(), 10) : null,
+        end: s.end.trim() ? parseInt(s.end.trim(), 10) : null,
+      }));
+
       const result = await window.electronAPI.downloadVideo({
         url: url.trim(),
         savePath: dialogResult.filePath,
-        startTime: start,
-        endTime: end,
+        sections: sectionsArray,
       });
 
       setStatus("completed");
@@ -195,12 +280,14 @@ export default function App() {
 
       // Reset form
       setUrl("");
-      setStartTime("");
-      setEndTime("");
+      setSections([{ start: "", end: "" }]);
     } catch (err) {
       // Ignore cancellation errors - user already canceled
       const errorMessage = err instanceof Error ? err.message : String(err);
-      if (errorMessage.includes("Download canceled by user") || errorMessage.includes("canceled by user")) {
+      if (
+        errorMessage.includes("Download canceled by user") ||
+        errorMessage.includes("canceled by user")
+      ) {
         return;
       }
       setStatus("error");
@@ -218,8 +305,7 @@ export default function App() {
       setProgress(0);
       setError(null);
       setUrl("");
-      setStartTime("");
-      setEndTime("");
+      setSections([{ start: "", end: "" }]);
       setVideoInfo(null);
       setSuccessMessage(null);
     } catch (err) {
@@ -268,48 +354,101 @@ export default function App() {
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label
-                  htmlFor="startTime"
-                  className="block text-sm font-medium text-gray-700 mb-2"
-                >
-                  Start Time (seconds)
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-gray-700">
+                  Video Sections
                 </label>
-                <input
-                  type="number"
-                  id="startTime"
-                  name="startTime"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  placeholder="0"
-                  min="0"
-                  step="1"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                <button
+                  type="button"
+                  onClick={addSection}
                   disabled={status === "extracting" || status === "downloading"}
-                />
+                  className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  + Add Section
+                </button>
               </div>
 
-              <div>
-                <label
-                  htmlFor="endTime"
-                  className="block text-sm font-medium text-gray-700 mb-2"
+              {sections.map((section, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-4 items-end"
                 >
-                  End Time (seconds)
-                </label>
-                <input
-                  type="number"
-                  id="endTime"
-                  name="endTime"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  placeholder="Leave empty for full video"
-                  min="0"
-                  step="1"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  disabled={status === "extracting" || status === "downloading"}
-                />
-              </div>
+                  <div>
+                    <label
+                      htmlFor={`startTime-${index}`}
+                      className="block text-sm font-medium text-gray-700 mb-2"
+                    >
+                      Start Time (seconds){" "}
+                      {index > 0 && <span className="text-red-500">*</span>}
+                    </label>
+                    <input
+                      type="number"
+                      id={`startTime-${index}`}
+                      name={`startTime-${index}`}
+                      value={section.start}
+                      onChange={(e) =>
+                        updateSection(index, "start", e.target.value)
+                      }
+                      placeholder={index === 0 ? "0" : "Required"}
+                      min="0"
+                      step="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      disabled={
+                        status === "extracting" || status === "downloading"
+                      }
+                      required={index > 0}
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor={`endTime-${index}`}
+                      className="block text-sm font-medium text-gray-700 mb-2"
+                    >
+                      End Time (seconds){" "}
+                      {index < sections.length - 1 && (
+                        <span className="text-red-500">*</span>
+                      )}
+                    </label>
+                    <input
+                      type="number"
+                      id={`endTime-${index}`}
+                      name={`endTime-${index}`}
+                      value={section.end}
+                      onChange={(e) =>
+                        updateSection(index, "end", e.target.value)
+                      }
+                      placeholder={
+                        index < sections.length - 1
+                          ? "Required"
+                          : "Leave empty for end of video"
+                      }
+                      min="0"
+                      step="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      disabled={
+                        status === "extracting" || status === "downloading"
+                      }
+                      required={index < sections.length - 1}
+                    />
+                  </div>
+
+                  {sections.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeSection(index)}
+                      disabled={
+                        status === "extracting" || status === "downloading"
+                      }
+                      className="px-3 py-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Remove section"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
 
             <div className="flex gap-3">

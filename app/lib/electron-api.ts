@@ -13,6 +13,7 @@ declare global {
         savePath: string;
         startTime?: number | null;
         endTime?: number | null;
+        sections?: Array<{ start: number | null; end: number | null }> | null;
       }) => Promise<{ success: boolean; filePath: string; fileSize: number }>;
       cancelDownload: () => Promise<{ success: boolean; message?: string }>;
       onDownloadProgress: (callback: (data: DownloadProgressData) => void) => void;
