@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   showSaveDialog: (options) => ipcRenderer.invoke("show-save-dialog", options),
   downloadVideo: (options) => ipcRenderer.invoke("download-video", options),
   cancelDownload: () => ipcRenderer.invoke("cancel-download"),
+  getLogPath: () => ipcRenderer.invoke("get-log-path"),
   onDownloadProgress: (callback) => {
     ipcRenderer.on("download-progress", (event, data) => callback(data));
   },

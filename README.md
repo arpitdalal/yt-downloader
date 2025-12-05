@@ -1,11 +1,12 @@
 # YouTube Video Downloader
 
-A desktop application built with Electron that allows users to download YouTube videos with custom start and end times. Built with React, Electron, and Python yt-dlp.
+A desktop application built with Electron that allows users to download YouTube videos with custom start and end times, or multiple sections that are automatically concatenated. Built with React, Electron, and Python yt-dlp.
 
 ## Features
 
 - 🎥 **YouTube Video Download**: Download videos with custom quality selection
 - ✂️ **Video Cutting**: Specify start and end times to download specific segments
+- 🎬 **Multiple Sections**: Cut and combine multiple sections from the same video into one output file
 - 📊 **Real-time Progress**: Track download progress with percentage and speed
 - 💾 **Save Dialog**: Choose where to save downloaded videos
 - 🎯 **Video Info Extraction**: Preview video information before downloading
@@ -64,24 +65,72 @@ A desktop application built with Electron that allows users to download YouTube 
 
 ## Building for Production
 
-1. **Build the application**:
+### Quick Start
+
+1. **Bundle dependencies** (required for production):
    ```bash
-   pnpm electron:build
+   # macOS
+   ./scripts/bundle-dependencies-macos.sh
+   
+   # Linux
+   ./scripts/bundle-dependencies-linux.sh
+   
+   # Windows
+   .\scripts\bundle-dependencies-windows.ps1
    ```
 
-2. **Output**: The built application will be in the `dist-electron` directory
+2. **Build the application**:
+   ```bash
+   # Build for current platform
+   pnpm electron:build
+   
+   # Or build for specific platform
+   pnpm electron:build:mac      # macOS
+   pnpm electron:build:linux     # Linux
+   pnpm electron:build:win       # Windows
+   ```
 
-3. **Platform-specific builds**:
-   - The build process automatically detects your platform
-   - For cross-platform builds, use CI/CD or build on each target platform
+3. **Output**: The built application will be in the `dist-electron` directory
+
+### Platform-Specific Builds
+
+**macOS:**
+```bash
+./scripts/bundle-dependencies-macos.sh
+pnpm electron:build:mac
+# Output: .dmg file
+```
+
+**Linux:**
+```bash
+./scripts/bundle-dependencies-linux.sh
+pnpm electron:build:linux
+# Output: .AppImage, .deb, or .rpm files
+```
+
+**Windows:**
+```bash
+.\scripts\bundle-dependencies-windows.ps1
+pnpm electron:build:win
+# Output: .exe installer
+```
+
+**Note:** For cross-platform builds, see [BUILD.md](./BUILD.md) for detailed instructions. GitHub Actions automatically builds all platforms when you push a tag starting with `v*`.
 
 ## Usage
 
 1. **Enter YouTube URL**: Paste a valid YouTube URL in the input field
-2. **Optional: Set time range**: 
-   - Enter start time (in seconds) to begin download from a specific point
-   - Enter end time (in seconds) to stop download at a specific point
-   - Leave empty to download the full video
+2. **Set video sections** (optional):
+   - **Single section**: Enter start time (in seconds) and/or end time (in seconds)
+     - Leave start time empty to start from the beginning
+     - Leave end time empty (only for the last section) to continue until the end
+   - **Multiple sections**: Click "+ Add Section" to add more sections
+     - Each section will be cut and then concatenated in order
+     - Example: Section 1 (0-25s) + Section 2 (30-60s) = one video with both segments
+   - **Validation rules**:
+     - Start time of subsequent sections cannot be empty
+     - End time of sections with a next section cannot be empty
+     - Next section's start time must not be before previous section's end time
 3. **Click Download**: The app will extract video information and show a save dialog
 4. **Choose save location**: Select where to save the downloaded video
 5. **Monitor progress**: Watch real-time download progress with percentage and speed
@@ -155,11 +204,21 @@ The Python downloader script (`python/downloader.py`) is called via child proces
 
 ### Video Cutting
 
+**Single Section:**
 When start/end times are specified:
 1. Full video is downloaded to a temporary location
 2. FFmpeg is used to cut the video segment
 3. Cut video is saved to user-selected location
 4. Temporary full video is automatically cleaned up
+
+**Multiple Sections:**
+When multiple sections are specified:
+1. Full video is downloaded to a temporary location (cached for reuse)
+2. Each section is cut individually to a temporary file using FFmpeg
+3. All sections are concatenated in order using FFmpeg's concat demuxer
+4. Final concatenated video is saved to user-selected location
+5. All temporary files (individual sections and concat file) are automatically cleaned up
+6. Original full video remains cached for future cuts from the same video
 
 ## Troubleshooting
 
@@ -187,14 +246,44 @@ When start/end times are specified:
 
 5. **Video cutting fails**:
    - Ensure FFmpeg is installed and working: `ffmpeg -version`
-   - Check that start time is less than end time
-   - Verify the video format supports cutting
+   - Check that start time is less than end time within each section
+   - For multiple sections, verify sections don't overlap and are in order
+   - Verify the video format supports cutting and concatenation
+
+6. **"Unable to start download process" error in production**:
+   - Check the log file (see [DEBUGGING.md](./DEBUGGING.md) for locations)
+   - Verify Python and FFmpeg are properly bundled
+   - Ensure you ran the bundling script before building
+   - On macOS, check Console.app for detailed error messages
 
 ### Production Build Issues
 
-- **Python not bundled**: Ensure Python script is included in `extraResources` in `package.json`
-- **FFmpeg not bundled**: FFmpeg needs to be included in the app bundle for production
+- **Python not bundled**: Run the platform-specific bundling script before building
+- **FFmpeg not bundled**: The bundling script should include FFmpeg automatically
 - **Large app size**: Consider using platform-specific builds to reduce size
+- **Python venv path errors**: The bundling scripts now automatically fix venv paths for portability
+
+### Getting Help
+
+If you encounter issues:
+
+1. **Check the log file** - see [DEBUGGING.md](./DEBUGGING.md) for log locations:
+   - macOS: `~/Library/Logs/yt-downloader/main.log`
+   - Windows: `%USERPROFILE%\AppData\Roaming\yt-downloader\logs\main.log`
+   - Linux: `~/.config/yt-downloader/logs/main.log`
+
+2. **View console output** (macOS/Linux):
+   ```bash
+   # Run app from terminal to see real-time logs
+   /Applications/YouTube\ Downloader.app/Contents/MacOS/YouTube\ Downloader
+   ```
+
+3. **Check the troubleshooting section** in [BUILD.md](./BUILD.md)
+
+4. **Open an issue on GitHub** with:
+   - Your platform and architecture
+   - Relevant log file entries
+   - Steps to reproduce
 
 ## Contributing
 
@@ -211,9 +300,10 @@ This project is licensed under the MIT License.
 ## Support
 
 For issues and questions:
-1. Check the troubleshooting section
-2. Review Electron console logs (View → Toggle Developer Tools)
-3. Open an issue on GitHub
+1. Check the troubleshooting section above
+2. Review log files (see [DEBUGGING.md](./DEBUGGING.md))
+3. Check [BUILD.md](./BUILD.md) for build-related issues
+4. Open an issue on GitHub with log file entries
 
 ---
 

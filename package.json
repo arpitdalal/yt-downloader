@@ -18,6 +18,12 @@
     "electron:build:win-x64": "node scripts/prebuild.js && vite build && electron-builder --win --x64",
     "electron:build:win-x86": "node scripts/prebuild.js && vite build && electron-builder --win --ia32",
     "electron:build:win-arm64": "node scripts/prebuild.js && vite build && electron-builder --win --arm64",
+    "electron:build:mac": "node scripts/prebuild.js && vite build && electron-builder --mac",
+    "electron:build:mac-x64": "node scripts/prebuild.js && vite build && electron-builder --mac --x64",
+    "electron:build:mac-arm64": "node scripts/prebuild.js && vite build && electron-builder --mac --arm64",
+    "electron:build:linux": "node scripts/prebuild.js && vite build && electron-builder --linux",
+    "electron:build:linux-x64": "node scripts/prebuild.js && vite build && electron-builder --linux --x64",
+    "electron:build:linux-arm64": "node scripts/prebuild.js && vite build && electron-builder --linux --arm64",
     "typecheck": "tsc",
     "python:install": "pip install -r python/requirements.txt",
     "python:typecheck": "mypy python/"
@@ -93,7 +99,12 @@
       ]
     },
     "linux": {
-      "icon": "build/icons/icon_512x512.png"
+      "icon": "build/icons/icon_512x512.png",
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ]
     }
   }
 }

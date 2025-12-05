@@ -1,0 +1,105 @@
+name: Build Linux
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip python3-venv ffmpeg
+      
+      - name: Bundle Python and FFmpeg
+        run: |
+          # Create resources directories
+          node scripts/prebuild.js
+          
+          # Create portable Python environment
+          mkdir -p resources/python
+          
+          # Use system Python to create a virtual environment
+          python3 -m venv resources/python
+          
+          # Activate venv and install yt-dlp
+          source resources/python/bin/activate
+          pip install --upgrade pip
+          pip install yt-dlp
+          deactivate
+          
+          # Copy downloader.py
+          cp python/downloader.py resources/python/downloader.py
+          
+          # Bundle FFmpeg
+          mkdir -p resources/ffmpeg
+          
+          # For Linux, we can bundle system FFmpeg or download static build
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # Download ARM64 static build
+            FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
+            curl -L -o ffmpeg.tar.xz "$FFMPEG_URL" || {
+              # Fallback to system FFmpeg
+              cp $(which ffmpeg) resources/ffmpeg/ffmpeg
+            }
+          else
+            # Download x64 static build
+            FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+            curl -L -o ffmpeg.tar.xz "$FFMPEG_URL" || {
+              # Fallback to system FFmpeg
+              cp $(which ffmpeg) resources/ffmpeg/ffmpeg
+            }
+          fi
+          
+          if [ -f "ffmpeg.tar.xz" ]; then
+            tar -xf ffmpeg.tar.xz
+            cp ffmpeg-*-static/ffmpeg resources/ffmpeg/ffmpeg
+            rm -rf ffmpeg-*-static ffmpeg.tar.xz
+          fi
+          
+          # Make ffmpeg executable
+          chmod +x resources/ffmpeg/ffmpeg
+      
+      - name: Build app
+        run: |
+          pnpm vite build
+          ARCH_FLAG=""
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            ARCH_FLAG="--arm64"
+          else
+            ARCH_FLAG="--x64"
+          fi
+          pnpm electron-builder --linux $ARCH_FLAG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist-electron/*.{AppImage,deb,rpm}
+          retention-days: 30

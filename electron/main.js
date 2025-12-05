@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import log from "electron-log";
-import { existsSync } from "fs";
+import { existsSync, readdirSync, statSync } from "fs";
 import os from "os";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -13,6 +13,11 @@ const __dirname = dirname(__filename);
 log.transports.file.level = "info";
 log.transports.console.level =
   process.env.NODE_ENV === "development" ? "debug" : "info";
+
+// Log file location for debugging (only in production)
+if (!isDev) {
+  console.log("Log file:", log.transports.file.getFile().path);
+}
 
 // Keep a global reference of the window object
 let mainWindow = null;
@@ -123,6 +128,61 @@ app.on("before-quit", () => {
 });
 
 app.whenReady().then(async () => {
+  // Log startup diagnostics
+  log.info("App starting", {
+    isDev,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  });
+
+  // Log Python and FFmpeg paths at startup
+  try {
+    const pythonPath = getPythonPath();
+    const ffmpegPath = getFfmpegPath();
+    const scriptPath = getPythonScriptPath();
+
+    log.info("Resource paths", {
+      pythonPath,
+      pythonExists: existsSync(pythonPath),
+      ffmpegPath,
+      ffmpegExists: existsSync(ffmpegPath),
+      scriptPath,
+      scriptExists: existsSync(scriptPath),
+    });
+
+    // List Python directory contents for debugging
+    if (!isDev && process.platform !== "win32") {
+      const pythonDir = join(process.resourcesPath, "python");
+      const pythonBinDir = join(pythonDir, "bin");
+      try {
+        if (existsSync(pythonBinDir)) {
+          const binFiles = readdirSync(pythonBinDir);
+          log.info("Python bin directory contents", {
+            path: pythonBinDir,
+            files: binFiles,
+          });
+        }
+        if (existsSync(pythonDir)) {
+          const pythonFiles = readdirSync(pythonDir);
+          log.info("Python directory contents", {
+            path: pythonDir,
+            files: pythonFiles,
+          });
+        }
+      } catch (error) {
+        log.warn("Could not list Python directory", { error: error.message });
+      }
+    }
+  } catch (error) {
+    log.error("Error checking resource paths at startup", {
+      error: error.message,
+      stack: error.stack,
+    });
+  }
+
   await createWindow();
 
   app.on("activate", async () => {
@@ -151,13 +211,13 @@ function getPythonPath() {
   } else {
     // In production, use bundled Python
     const platform = process.platform;
-    const arch = process.arch;
-    const pythonPath = join(
-      process.resourcesPath,
-      "python",
-      platform === "win32" ? "python.exe" : "python3"
-    );
-    return pythonPath;
+    if (platform === "win32") {
+      // Windows: Python embeddable has python.exe in root
+      return join(process.resourcesPath, "python", "python.exe");
+    } else {
+      // macOS/Linux: Python venv has python3 in bin/ directory
+      return join(process.resourcesPath, "python", "bin", "python3");
+    }
   }
 }
 
@@ -169,9 +229,34 @@ function validatePythonPath(pythonPath) {
       resourcesPath: process.resourcesPath,
       platform: process.platform,
       arch: process.arch,
+      pythonPath,
+      // List directory contents for debugging
+      pythonDir:
+        process.platform === "win32"
+          ? dirname(pythonPath)
+          : join(process.resourcesPath, "python", "bin"),
     });
     throw new Error(error);
   }
+
+  // On macOS/Linux, check if executable has execute permissions
+  if (process.platform !== "win32") {
+    try {
+      const stats = statSync(pythonPath);
+      if (!(stats.mode & 0o111)) {
+        log.warn("Python executable may not have execute permissions", {
+          pythonPath,
+          mode: stats.mode.toString(8),
+        });
+      }
+    } catch (error) {
+      log.warn("Could not check Python executable permissions", {
+        pythonPath,
+        error: error.message,
+      });
+    }
+  }
+
   return pythonPath;
 }
 
@@ -277,14 +362,26 @@ ipcMain.handle("extract-video-info", async (event, url) => {
     let scriptPath;
     try {
       scriptPath = getPythonScriptPath();
+
+      log.info("Validating Python setup for extract-video-info", {
+        pythonPath,
+        scriptPath,
+        pythonExists: existsSync(pythonPath),
+        scriptExists: existsSync(scriptPath),
+        resourcesPath: process.resourcesPath,
+      });
+
       // Validate Python exists before spawning
       if (!isDev) {
         validatePythonPath(pythonPath);
       }
     } catch (error) {
-      log.error("Python configuration error", {
+      log.error("Python configuration error for extract-video-info", {
         error: error.message,
         pythonPath,
+        scriptPath,
+        resourcesPath: process.resourcesPath,
+        stack: error.stack,
       });
       reject(new Error(`Configuration error: ${error.message}`));
       return;
@@ -550,14 +647,26 @@ ipcMain.handle("download-video", async (event, options) => {
     let scriptPath;
     try {
       scriptPath = getPythonScriptPath();
+
+      log.info("Validating Python setup for download-video", {
+        pythonPath,
+        scriptPath,
+        pythonExists: existsSync(pythonPath),
+        scriptExists: existsSync(scriptPath),
+        resourcesPath: process.resourcesPath,
+      });
+
       // Validate Python exists before spawning
       if (!isDev) {
         validatePythonPath(pythonPath);
       }
     } catch (error) {
-      log.error("Python configuration error", {
+      log.error("Python configuration error for download-video", {
         error: error.message,
         pythonPath,
+        scriptPath,
+        resourcesPath: process.resourcesPath,
+        stack: error.stack,
       });
       reject(new Error(`Configuration error: ${error.message}`));
       return;
@@ -752,4 +861,14 @@ ipcMain.handle("cancel-download", async () => {
     return { success: true };
   }
   return { success: false, message: "No active download" };
+});
+
+// IPC: Get log file path (for debugging)
+ipcMain.handle("get-log-path", async () => {
+  return {
+    logPath: log.transports.file.getFile().path,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+  };
 });

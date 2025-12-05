@@ -1,0 +1,132 @@
+name: Build macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Bundle Python and FFmpeg
+        run: |
+          # Create resources directories
+          node scripts/prebuild.js
+          
+          # Determine Python architecture
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            PYTHON_ARCH="arm64"
+          else
+            PYTHON_ARCH="universal2"
+          fi
+          
+          # Download Python framework (using pyenv or direct download)
+          PYTHON_VERSION="3.12.0"
+          echo "Setting up Python $PYTHON_VERSION for $PYTHON_ARCH..."
+          
+          # Use Homebrew Python or download from python.org
+          # For CI, we'll use system Python and create a portable bundle
+          mkdir -p resources/python
+          
+          # Copy system Python (if available) or download
+          if command -v python3 &> /dev/null; then
+            PYTHON_PATH=$(which python3)
+            echo "Using system Python: $PYTHON_PATH"
+            
+            # Create a portable Python bundle
+            # For production, you might want to download Python framework from python.org
+            # For now, we'll create symlinks and bundle necessary files
+            cp -R $(python3 -c "import sys; print(sys.prefix)")/* resources/python/ 2>/dev/null || true
+            
+            # Copy python3 binary
+            cp "$PYTHON_PATH" resources/python/python3 || ln -s "$PYTHON_PATH" resources/python/python3
+          else
+            echo "Python3 not found, downloading..."
+            # Download Python from python.org
+            PYTHON_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-macos11.pkg"
+            # Note: This is a simplified approach. For production, you'd want to extract the framework
+            echo "Please ensure Python is installed on the system"
+          fi
+          
+          # Install yt-dlp in the bundled Python
+          if [ -f "resources/python/python3" ]; then
+            resources/python/python3 -m pip install --target resources/python/lib/python3.12/site-packages yt-dlp || \
+            python3 -m pip install --target resources/python/lib/python3.12/site-packages yt-dlp
+          else
+            python3 -m pip install --target resources/python/lib/python3.12/site-packages yt-dlp
+          fi
+          
+          # Copy downloader.py
+          cp python/downloader.py resources/python/downloader.py
+          
+          # Download FFmpeg
+          echo "Downloading FFmpeg..."
+          mkdir -p resources/ffmpeg
+          
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            FFMPEG_ARCH="arm64"
+          else
+            FFMPEG_ARCH="x86_64"
+          fi
+          
+          # Download FFmpeg static build
+          FFMPEG_URL="https://evermeet.cx/ffmpeg/ffmpeg-${FFMPEG_ARCH}.zip"
+          curl -L -o ffmpeg.zip "$FFMPEG_URL" || {
+            echo "FFmpeg download failed, trying alternative source..."
+            # Alternative: use Homebrew version
+            if command -v brew &> /dev/null; then
+              brew install ffmpeg || true
+              cp $(which ffmpeg) resources/ffmpeg/ffmpeg || ln -s $(which ffmpeg) resources/ffmpeg/ffmpeg
+            fi
+          }
+          
+          if [ -f "ffmpeg.zip" ]; then
+            unzip -q ffmpeg.zip -d resources/ffmpeg/
+            rm ffmpeg.zip
+          fi
+          
+          # Make ffmpeg executable
+          chmod +x resources/ffmpeg/ffmpeg 2>/dev/null || true
+      
+      - name: Build app
+        run: |
+          pnpm vite build
+          ARCH_FLAG=""
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            ARCH_FLAG="--arm64"
+          else
+            ARCH_FLAG="--x64"
+          fi
+          pnpm electron-builder --mac $ARCH_FLAG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist-electron/*.dmg
+          retention-days: 30
