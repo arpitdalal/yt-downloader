@@ -167,6 +167,9 @@ jobs:
             ARCH_FLAG="--x64"
           fi
           pnpm electron-builder --linux $ARCH_FLAG
+          
+          echo "Listing dist-electron directory:"
+          ls -R dist-electron || echo "dist-electron not found"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
@@ -174,5 +177,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
-          path: dist-electron/*.{AppImage,deb,rpm}
+          path: |
+            dist-electron/*.AppImage
+            dist-electron/*.deb
+            dist-electron/*.rpm
           retention-days: 30
