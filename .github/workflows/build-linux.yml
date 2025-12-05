@@ -68,12 +68,7 @@ jobs:
             PYTHON_VERSION_SHORT=$(resources/python/bin/python3 --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
             
             # Update pyvenv.cfg to use relative paths
-            cat > resources/python/pyvenv.cfg <<EOF
-home = bin
-include-system-site-packages = false
-version = $PYTHON_VERSION_SHORT
-executable = bin/python3
-EOF
+            printf 'home = bin\ninclude-system-site-packages = false\nversion = %s\nexecutable = bin/python3\n' "$PYTHON_VERSION_SHORT" > resources/python/pyvenv.cfg
             
             # Fix all shebang lines in Python scripts to use relative paths
             find resources/python/bin -type f -name "*.py" -exec sed -i "1s|^#!.*python.*|#!/usr/bin/env python3|" {} \;
