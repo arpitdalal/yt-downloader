@@ -35,7 +35,10 @@ async function ensureResourcesDirs() {
         // Only warn if directory has files but is missing required ones
         // Empty directory is expected before bundling
         if (files.length > 0) {
-          const missing = dir.required.filter((file) => !files.includes(file));
+          // readdir() returns names, not nested paths; verify via existsSync
+          const missing = dir.required.filter(
+            (file) => !existsSync(join(dir.path, file))
+          );
           if (missing.length > 0) {
             console.warn(
               `⚠️  Warning: ${
