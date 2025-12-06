@@ -1,11 +1,12 @@
 # YouTube Video Downloader
 
-A desktop application built with Electron that allows users to download YouTube videos with custom start and end times, or multiple sections that are automatically concatenated. Built with React, Electron, and Python yt-dlp.
+A desktop application built with Electron that allows users to download YouTube videos or process local video files with custom start/end times or multiple sections that are automatically concatenated. Built with React, Electron, and Python yt-dlp.
 
 ## Features
 
 - 🎥 **YouTube Video Download**: Download videos with custom quality selection
 - ✂️ **Video Cutting**: Specify start and end times to download specific segments
+- 📂 **Local File Processing**: Load an existing video and cut/concat without downloading
 - 🎬 **Multiple Sections**: Cut and combine multiple sections from the same video into one output file
 - 📊 **Real-time Progress**: Track download progress with percentage and speed
 - 💾 **Save Dialog**: Choose where to save downloaded videos
@@ -119,22 +120,22 @@ pnpm electron:build:win
 
 ## Usage
 
-1. **Enter YouTube URL**: Paste a valid YouTube URL in the input field
-2. **Set video sections** (optional):
-   - **Single section**: Enter start time (in seconds) and/or end time (in seconds)
-     - Leave start time empty to start from the beginning
-     - Leave end time empty (only for the last section) to continue until the end
-   - **Multiple sections**: Click "+ Add Section" to add more sections
-     - Each section will be cut and then concatenated in order
-     - Example: Section 1 (0-25s) + Section 2 (30-60s) = one video with both segments
-   - **Validation rules**:
-     - Start time of subsequent sections cannot be empty
-     - End time of sections with a next section cannot be empty
-     - Next section's start time must not be before previous section's end time
-3. **Click Download**: The app will extract video information and show a save dialog
-4. **Choose save location**: Select where to save the downloaded video
-5. **Monitor progress**: Watch real-time download progress with percentage and speed
-6. **Cancel if needed**: Use the Cancel button to stop an in-progress download
+### Download from YouTube
+
+1. Enter YouTube URL.
+2. Set sections (optional):
+   - Single section: enter start/end seconds. Empty start = beginning. Last section can leave end empty to go to file end.
+   - Multiple sections: click "+ Add Section"; sections are cut then concatenated in order.
+   - Validation: later sections need a start; all but last need an end; next start cannot precede previous end.
+3. Click **Download** → choose save path.
+4. Monitor progress; **Cancel** if needed.
+
+### Process a local video file (new)
+
+1. Click **Choose Video File** (disables URL field).
+2. Set sections (optional, same rules as above). If left empty, the file is copied as-is.
+3. Click **Download/Process** → pick output path.
+4. App cuts/concats locally and shows the saved file path on success.
 
 ## Project Structure
 
@@ -181,6 +182,13 @@ The app uses Electron's IPC (Inter-Process Communication) to bridge the React fr
 6. Main process spawns Python script with yt-dlp
 7. Progress updates are streamed back via IPC events
 8. Completed file is saved to user-selected location
+
+### Local File Flow
+
+1. User picks a local video (URL input disables)
+2. Frontend calls `processLocalVideo` IPC handler with sections and save path
+3. Main process runs `python/downloader.py --local <input> <sections_json> <output>`
+4. Python uses FFmpeg to cut/concat (or copy if sections are empty) and returns file info
 
 ## Available Scripts
 
@@ -250,7 +258,12 @@ When multiple sections are specified:
    - For multiple sections, verify sections don't overlap and are in order
    - Verify the video format supports cutting and concatenation
 
-6. **"Unable to start download process" error in production**:
+6. **Local file processing fails**:
+   - Ensure the source file is readable (avoid locked/network locations)
+   - Confirm FFmpeg is installed or bundled
+   - Validate sections are integers and ordered; empty list copies the whole file
+
+7. **"Unable to start download process" error in production**:
    - Check the log file (see [DEBUGGING.md](./DEBUGGING.md) for locations)
    - Verify Python and FFmpeg are properly bundled
    - Ensure you ran the bundling script before building

@@ -107,6 +107,12 @@ If you see permission errors:
 - On macOS, check if Gatekeeper is blocking the app
 - Try: `chmod +x /path/to/python3`
 
+### Local File Processing Issues
+- Confirm the input file is readable (avoid locked/network locations)
+- Ensure FFmpeg is available/bundled; check logs for `FFMPEG_PATH`
+- Review `process-local-video` log entries for the exact Python call/exit code
+- Validate sections JSON: non-negative integers, in order; empty list copies the file
+
 ## Debugging Steps
 
 1. **Check startup logs:**
