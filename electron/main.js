@@ -486,6 +486,157 @@ ipcMain.handle("show-save-dialog", async (event, options) => {
   return { canceled: false, filePath: result.filePath };
 });
 
+// IPC: Show open dialog
+ipcMain.handle("show-open-dialog", async (event, options) => {
+  const { filters } = options;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: filters || [
+      { name: "Video Files", extensions: ["mp4", "webm", "mkv", "mov", "avi"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+
+  return { canceled: result.canceled, filePaths: result.filePaths };
+});
+
+// IPC: Process local video
+ipcMain.handle("process-local-video", async (event, options) => {
+  const { inputPath, savePath, sections } = options;
+
+  return new Promise((resolve, reject) => {
+    // Validate inputs
+    if (!inputPath || !savePath) {
+      reject(new Error("Input path and save path are required"));
+      return;
+    }
+
+    // Reset cancellation flag
+    isDownloadCanceled = false;
+
+    // Kill any existing download process
+    if (currentDownloadProcess) {
+      log.info("Killing existing process");
+      currentDownloadProcess.kill();
+      currentDownloadProcess = null;
+    }
+
+    const pythonPath = getPythonPath();
+    let scriptPath;
+    try {
+      scriptPath = getPythonScriptPath();
+      if (!isDev) {
+        validatePythonPath(pythonPath);
+      }
+    } catch (error) {
+      reject(new Error(`Configuration error: ${error.message}`));
+      return;
+    }
+
+    // Prepare arguments for local processing
+    // Format: script.py --local <input_path> <sections_json> <output_path>
+    const args = [scriptPath, "--local", inputPath];
+
+    if (sections && Array.isArray(sections) && sections.length > 0) {
+      args.push(JSON.stringify(sections));
+    } else {
+      args.push("[]"); // Empty sections list
+    }
+
+    args.push(savePath);
+
+    log.info("Starting local video processing", {
+      inputPath,
+      savePath,
+      sections,
+      pythonPath,
+    });
+
+    const pythonDir =
+      !isDev && process.platform === "win32" ? dirname(pythonPath) : undefined;
+
+    const ffmpegPath = getFfmpegPath();
+    const env = { ...process.env, FFMPEG_PATH: ffmpegPath };
+
+    const pythonProcess = spawn(pythonPath, args, {
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: pythonDir,
+      env: env,
+    });
+    currentDownloadProcess = pythonProcess;
+
+    let stdout = "";
+    let stderr = "";
+
+    pythonProcess.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    pythonProcess.stderr.on("data", (data) => {
+      const error = data.toString();
+      stderr += error;
+    });
+
+    pythonProcess.on("close", (code) => {
+      currentDownloadProcess = null;
+
+      if (isDownloadCanceled) {
+        reject(new Error("Processing canceled by user"));
+        return;
+      }
+
+      if (code === 0) {
+        try {
+          let jsonStr = stdout.trim();
+          if (!jsonStr.startsWith("{")) {
+            const jsonMatch = jsonStr.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
+            if (jsonMatch && jsonMatch.length > 0) {
+              jsonStr = jsonMatch[jsonMatch.length - 1];
+            }
+          }
+
+          const result = JSON.parse(jsonStr);
+
+          if (result.success) {
+            resolve({
+              success: true,
+              filePath: result.file_path,
+              fileSize: result.file_size,
+            });
+          } else {
+            reject(new Error(result.error_message || "Processing failed"));
+          }
+        } catch (error) {
+          log.error("Failed to parse processing result", {
+            error: error.message,
+            stdout,
+          });
+          reject(
+            new Error(`Failed to parse processing result: ${error.message}`)
+          );
+        }
+      } else {
+        log.error("Processing failed", {
+          code,
+          stderr,
+        });
+        reject(
+          new Error(
+            `Processing failed: ${stderr || `Process exited with code ${code}`}`
+          )
+        );
+      }
+    });
+
+    pythonProcess.on("error", (error) => {
+      currentDownloadProcess = null;
+      log.error("Failed to start processing", { error: error.message });
+      reject(new Error(`Failed to start processing: ${error.message}`));
+    });
+  });
+});
+
 // IPC: Download video
 ipcMain.handle("download-video", async (event, options) => {
   const { url, savePath, startTime, endTime, sections } = options;

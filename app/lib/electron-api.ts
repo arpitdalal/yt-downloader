@@ -8,11 +8,19 @@ declare global {
 				defaultPath?: string;
 				defaultFilename?: string;
 			}) => Promise<{ canceled: boolean; filePath?: string }>;
+			showOpenDialog: (options: {
+				filters?: Array<{ name: string; extensions: string[] }>;
+			}) => Promise<{ canceled: boolean; filePaths: string[] }>;
 			downloadVideo: (options: {
 				url: string;
 				savePath: string;
 				startTime?: number | null;
 				endTime?: number | null;
+				sections?: Array<{ start: number | null; end: number | null }> | null;
+			}) => Promise<{ success: boolean; filePath: string; fileSize: number }>;
+			processLocalVideo: (options: {
+				inputPath: string;
+				savePath: string;
 				sections?: Array<{ start: number | null; end: number | null }> | null;
 			}) => Promise<{ success: boolean; filePath: string; fileSize: number }>;
 			cancelDownload: () => Promise<{ success: boolean; message?: string }>;

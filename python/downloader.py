@@ -1023,6 +1023,89 @@ def main():
         sys.stdout.flush()
         sys.exit(0)
     
+    # Check if this is a local file processing request
+    if sys.argv[1] == "--local":
+        if len(sys.argv) < 5:
+            print("Usage: python downloader.py --local <input_path> <sections_json> <output_path>", file=sys.stderr)
+            sys.exit(1)
+        
+        input_path = sys.argv[2]
+        sections_json = sys.argv[3]
+        output_path = sys.argv[4]
+        
+        downloader = YouTubeDownloader()
+        
+        try:
+            # Parse sections
+            sections = []
+            if sections_json and sections_json.strip() and sections_json != "[]":
+                try:
+                    parsed_sections = json.loads(sections_json)
+                    if isinstance(parsed_sections, list):
+                        sections = [
+                            (
+                                section.get('start') if isinstance(section, dict) else None,
+                                section.get('end') if isinstance(section, dict) else None
+                            )
+                            for section in parsed_sections
+                        ]
+                except json.JSONDecodeError:
+                    sys.stdout.write(json.dumps({
+                        'success': False,
+                        'error_message': 'Invalid sections JSON'
+                    }))
+                    sys.stdout.flush()
+                    sys.exit(1)
+            
+            # Process local file
+            success = False
+            error_message = None
+            
+            if sections:
+                # Use a dummy video ID for temp files
+                video_id = "local_video"
+                success = downloader.cut_and_concatenate_sections(
+                    input_path,
+                    sections,
+                    output_path,
+                    video_id
+                )
+                if not success:
+                    error_message = "Failed to cut and concatenate sections"
+            else:
+                # Just copy if no sections (or maybe we shouldn't allow this? But for completeness)
+                # If no sections are defined, we probably just want to copy the file or it's a no-op?
+                # The UI enforces sections usually. If sections is empty, maybe we treat it as "whole video"?
+                # But for now let's assume if no sections, we just copy.
+                try:
+                    shutil.copy2(input_path, output_path)
+                    success = True
+                except Exception as e:
+                    success = False
+                    error_message = f"Failed to copy file: {str(e)}"
+            
+            # Get file size if successful
+            file_size = 0
+            if success and os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+            
+            sys.stdout.write(json.dumps({
+                'success': success,
+                'file_path': output_path if success else None,
+                'file_size': file_size,
+                'error_message': error_message
+            }))
+            sys.stdout.flush()
+            sys.exit(0 if success else 1)
+            
+        except Exception as e:
+            sys.stdout.write(json.dumps({
+                'success': False,
+                'error_message': f"Unexpected error: {str(e)}"
+            }))
+            sys.stdout.flush()
+            sys.exit(1)
+
     # Regular download mode
     url = sys.argv[1]
     download_from_start = len(sys.argv) > 2 and sys.argv[2].lower() == 'true'

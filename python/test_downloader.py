@@ -1417,6 +1417,110 @@ class TestDownloadVideo:
                             assert result.success is True
                             assert result.file_path == str(output_file)
     
+    def test_download_copies_outside_temp_for_cache(self, temp_dir, sample_video_info, mock_ytdlp_download):
+        """Ensure downloaded file outside temp is copied into temp cache"""
+        output_file = temp_dir / 'output.mp4'
+        with tempfile.TemporaryDirectory() as external_tmp:
+            downloaded_file = Path(external_tmp) / f"{sample_video_info['id']}.mp4"
+            downloaded_file.write_bytes(b'video data')
+            
+            downloader = YouTubeDownloader()
+            with patch.object(downloader, 'extract_video_info', return_value=VideoInfo(
+                id=sample_video_info['id'],
+                title=sample_video_info['title'],
+                duration=sample_video_info['duration'],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None
+            )):
+                with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
+                    with patch.object(downloader, '_get_cached_video_path', return_value=None):
+                        with patch.object(downloader, '_find_downloaded_file', return_value=downloaded_file):
+                            with patch.object(downloader, '_check_file_stability', return_value=True):
+                                with patch('downloader.shutil.copy2') as mock_copy:
+                                    def copy_side_effect(src, dst):
+                                        Path(dst).write_bytes(b'copied data')
+                                        return dst
+                                    mock_copy.side_effect = copy_side_effect
+                                    
+                                    result = downloader.download_video(
+                                        'https://youtube.com/watch?v=test',
+                                        str(output_file)
+                                    )
+                                    
+                                    cached_temp = temp_dir / f"{sample_video_info['id']}.mp4"
+                                    assert result.success is True
+                                    assert result.cached_file_path == str(cached_temp)
+                                    # First copy should target temp cache, second the final output
+                                    dests = [Path(call.args[1]) for call in mock_copy.call_args_list]
+                                    assert cached_temp in dests
+                                    assert output_file in dests
+    
+    def test_download_temp_copy_failure(self, temp_dir, sample_video_info, mock_ytdlp_download):
+        """Fail gracefully if caching copy into temp raises"""
+        output_file = temp_dir / 'output.mp4'
+        with tempfile.TemporaryDirectory() as external_tmp:
+            downloaded_file = Path(external_tmp) / f"{sample_video_info['id']}.mp4"
+            downloaded_file.write_bytes(b'video data')
+            
+            downloader = YouTubeDownloader()
+            with patch.object(downloader, 'extract_video_info', return_value=VideoInfo(
+                id=sample_video_info['id'],
+                title=sample_video_info['title'],
+                duration=sample_video_info['duration'],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None
+            )):
+                with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
+                    with patch.object(downloader, '_get_cached_video_path', return_value=None):
+                        with patch.object(downloader, '_find_downloaded_file', return_value=downloaded_file):
+                            with patch('downloader.shutil.copy2', side_effect=PermissionError("denied")):
+                                result = downloader.download_video(
+                                    'https://youtube.com/watch?v=test',
+                                    str(output_file)
+                                )
+                                assert result.success is False
+                                assert 'Failed to store full video in temp directory' in result.error_message
+    
+    def test_download_temp_file_not_stable(self, temp_dir, sample_video_info, mock_ytdlp_download):
+        """Error if temp-stored full video is unstable"""
+        output_file = temp_dir / 'output.mp4'
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.mp4"
+        downloaded_file.write_bytes(b'video data')
+        
+        downloader = YouTubeDownloader()
+        with patch.object(downloader, 'extract_video_info', return_value=VideoInfo(
+            id=sample_video_info['id'],
+            title=sample_video_info['title'],
+            duration=sample_video_info['duration'],
+            is_live=False,
+            is_scheduled=False,
+            scheduled_start_time=None,
+            thumbnail=None,
+            uploader=None,
+            view_count=None,
+            upload_date=None
+        )):
+            with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
+                with patch.object(downloader, '_get_cached_video_path', return_value=None):
+                    with patch.object(downloader, '_find_downloaded_file', return_value=downloaded_file):
+                        with patch.object(downloader, '_check_file_stability', return_value=False):
+                            result = downloader.download_video(
+                                'https://youtube.com/watch?v=test',
+                                str(output_file)
+                            )
+                            assert result.success is False
+                            assert 'not stable' in (result.error_message or '').lower()
+    
     def test_download_invalid_output_path(self, sample_video_info):
         """Test download with invalid output path"""
         downloader = YouTubeDownloader()
