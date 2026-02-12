@@ -1,110 +1,45 @@
 {
   "name": "yt-downloader",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "YouTube Downloader Application",
   "author": "Arpit Dalal <arpitdalalm@gmail.com>",
   "private": true,
   "type": "module",
-  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "dev:renderer": "vite",
-    "dev:main": "vite & NODE_ENV=development electron .",
+    "tauri:dev": "tauri dev",
+    "test": "pnpm test:rust && pnpm test:python",
+    "test:rust": "cd src-tauri && cargo test",
+    "test:python": "python3 -m pytest python/test_downloader.py",
+    "test:python:realworld": "RUN_REAL_WORLD_TESTS=1 python3 -m pytest python/test_downloader_real_world.py -s",
     "build": "vite build",
+    "tauri:build": "tauri build",
+    "tauri:build:mac": "tauri build --target aarch64-apple-darwin",
+    "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc",
+    "tauri:build:linux": "tauri build --target x86_64-unknown-linux-gnu",
     "prebuild": "node scripts/prebuild.js",
-    "electron:dev": "NODE_ENV=development electron .",
-    "electron:build": "node scripts/prebuild.js && vite build && electron-builder",
-    "electron:build:win": "node scripts/prebuild.js && vite build && electron-builder --win",
-    "electron:build:win-x64": "node scripts/prebuild.js && vite build && electron-builder --win --x64",
-    "electron:build:win-x86": "node scripts/prebuild.js && vite build && electron-builder --win --ia32",
-    "electron:build:win-arm64": "node scripts/prebuild.js && vite build && electron-builder --win --arm64",
-    "electron:build:mac": "node scripts/prebuild.js && vite build && electron-builder --mac",
-    "electron:build:mac-x64": "node scripts/prebuild.js && vite build && electron-builder --mac --x64",
-    "electron:build:mac-arm64": "node scripts/prebuild.js && vite build && electron-builder --mac --arm64",
-    "electron:build:linux": "node scripts/prebuild.js && vite build && electron-builder --linux",
-    "electron:build:linux-x64": "node scripts/prebuild.js && vite build && electron-builder --linux --x64",
-    "electron:build:linux-arm64": "node scripts/prebuild.js && vite build && electron-builder --linux --arm64",
     "typecheck": "tsc",
     "python:install": "pip install -r python/requirements.txt",
     "python:typecheck": "mypy python/"
   },
   "dependencies": {
-    "electron-log": "^5.4.3",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-log": "^2.8.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.4",
+    "@tauri-apps/cli": "^2.10.0",
     "@types/node": "^20",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8",
     "tailwindcss": "^4.1.4",
     "typescript": "^5.8.3",
     "vite": "^6.3.3",
     "vite-tsconfig-paths": "^5.1.4"
-  },
-  "pnpm": {
-    "ignoredBuiltDependencies": [
-      "electron"
-    ]
-  },
-  "build": {
-    "appId": "com.ytdownloader.app",
-    "productName": "YouTube Downloader",
-    "directories": {
-      "output": "dist-electron",
-      "buildResources": "build"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "python/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "resources/python",
-        "to": "python",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "resources/ffmpeg",
-        "to": "ffmpeg",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "icon": "build/icons/icon.png",
-    "mac": {
-      "icon": "build/icons/icon.icns",
-      "category": "public.app-category.utilities"
-    },
-    "win": {
-      "icon": "build/icons/icon.png",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "ia32",
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "linux": {
-      "icon": "build/icons/icon_512x512.png",
-      "target": [
-        "AppImage",
-        "deb",
-        "rpm"
-      ]
-    }
   }
 }

@@ -34,3 +34,6 @@ dist-electron/
 
 # Bundled dependencies (large binaries)
 resources/
+
+# Tauri build artifacts
+src-tauri/target/

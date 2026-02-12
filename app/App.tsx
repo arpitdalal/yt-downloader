@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  electronAPI,
+  tauriAPI,
   type VideoInfo,
   type DownloadProgressData,
-} from "./lib/electron-api.js";
+} from "./lib/tauri-api.js";
 
 type DownloadStatus =
   | "idle"
@@ -26,18 +26,33 @@ export default function App() {
 
   // Set up progress listener
   useEffect(() => {
-    if (!window.electronAPI) {
-      return;
-    }
-
-    window.electronAPI.onDownloadProgress((data: DownloadProgressData) => {
+    tauriAPI.onDownloadProgress((data: DownloadProgressData) => {
       if (status === "downloading") {
-        setProgress(data.percent || 0);
+        setProgress((previous) => {
+          if (typeof data.percent === "number" && Number.isFinite(data.percent)) {
+            return Math.min(99.5, Math.max(previous, data.percent));
+          }
+
+          if (
+            typeof data.downloadedBytes === "number" &&
+            typeof data.totalBytes === "number" &&
+            data.totalBytes > 0
+          ) {
+            const derived = (data.downloadedBytes / data.totalBytes) * 100;
+            return Math.min(99.5, Math.max(previous, derived));
+          }
+
+          if (typeof data.downloadedBytes === "number" && data.downloadedBytes > 0) {
+            return Math.min(95, previous + 0.8);
+          }
+
+          return previous;
+        });
       }
     });
 
     return () => {
-      window.electronAPI.removeDownloadProgressListener();
+      tauriAPI.removeDownloadProgressListener();
     };
   }, [status]);
 
@@ -72,6 +87,9 @@ export default function App() {
     ) {
       return "The requested video quality is not available. Please try again.";
     }
+    if (message.includes("High-quality stream is available up to")) {
+      return message;
+    }
     if (message.includes("disk space") || message.includes("No space")) {
       return "Not enough disk space. Please free up space and try again.";
     }
@@ -79,7 +97,10 @@ export default function App() {
       return "Unable to get video information. Please check the URL and try again.";
     }
     if (message.includes("Download process failed")) {
-      return "Download failed. The video may be unavailable or there was a network error. Please try again.";
+      const details = message.replace("Download process failed:", "").trim();
+      return details
+        ? `Download failed: ${details}`
+        : "Download failed. The video may be unavailable or there was a network error. Please try again.";
     }
     if (message.includes("Invalid YouTube URL")) {
       return "Please enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...).";
@@ -202,9 +223,8 @@ export default function App() {
   };
 
   const handleChooseFile = async () => {
-    if (!window.electronAPI) return;
     try {
-      const result = await window.electronAPI.showOpenDialog({
+      const result = await tauriAPI.showOpenDialog({
         filters: [
           {
             name: "Video Files",
@@ -234,14 +254,6 @@ export default function App() {
     e.preventDefault();
     if (!url.trim() && !localFile) return;
 
-    if (!window.electronAPI) {
-      setError(
-        "Electron API is not available. Please ensure the app is running in Electron."
-      );
-      setStatus("error");
-      return;
-    }
-
     // Validate sections
     const validationError = validateSections();
     if (validationError) {
@@ -265,7 +277,7 @@ export default function App() {
         const originalFilename = localFile.split(/[/\\]/).pop() || "video.mp4";
         const defaultFilename = `processed_${originalFilename}`;
 
-        const dialogResult = await window.electronAPI.showSaveDialog({
+        const dialogResult = await tauriAPI.showSaveDialog({
           defaultFilename,
         });
 
@@ -286,7 +298,7 @@ export default function App() {
           end: s.end.trim() ? parseInt(s.end.trim(), 10) : null,
         }));
 
-        const result = await window.electronAPI.processLocalVideo({
+        const result = await tauriAPI.processLocalVideo({
           inputPath: localFile,
           savePath: dialogResult.filePath,
           sections: sectionsArray,
@@ -300,7 +312,7 @@ export default function App() {
         // Handle YouTube download
         // Step 1: Extract video info
         setStatus("extracting");
-        const info = await window.electronAPI.extractVideoInfo(url.trim());
+        const info = await tauriAPI.extractVideoInfo(url.trim());
 
         if (!info) {
           throw new Error("Failed to extract video information");
@@ -312,7 +324,7 @@ export default function App() {
         const sanitizedTitle = sanitizeFilename(info.title || "video");
         const defaultFilename = `${sanitizedTitle}.mp4`;
 
-        const dialogResult = await window.electronAPI.showSaveDialog({
+        const dialogResult = await tauriAPI.showSaveDialog({
           defaultFilename,
         });
 
@@ -337,7 +349,7 @@ export default function App() {
           end: s.end.trim() ? parseInt(s.end.trim(), 10) : null,
         }));
 
-        const result = await window.electronAPI.downloadVideo({
+        const result = await tauriAPI.downloadVideo({
           url: url.trim(),
           savePath: dialogResult.filePath,
           sections: sectionsArray,
@@ -370,11 +382,8 @@ export default function App() {
   };
 
   const handleCancel = async () => {
-    if (!window.electronAPI) {
-      return;
-    }
     try {
-      await window.electronAPI.cancelDownload();
+      await tauriAPI.cancelDownload();
       setStatus("idle");
       setProgress(0);
       setError(null);

@@ -1,0 +1,62 @@
+name: Tauri Gate
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  gate:
+    name: gate-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022, ubuntu-22.04]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3 python3-pip python3-venv ffmpeg \
+            libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Bundle dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: ./scripts/bundle-dependencies-macos.sh
+
+      - name: Bundle dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: ./scripts/bundle-dependencies-linux.sh
+
+      - name: Bundle dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/bundle-dependencies-windows.ps1
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build Tauri app (no bundle)
+        run: pnpm tauri build --debug --no-bundle --ci

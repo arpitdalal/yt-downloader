@@ -30,6 +30,7 @@ MAX_RETRY_DELAY = 3.0
 RETRY_BACKOFF_MULTIPLIER = 1.5
 INCOMPLETE_FILE_EXTENSIONS = ('.part', '.ytdl')
 VIDEO_EXTENSIONS = ['mp4', 'webm', 'mkv', 'm4a', 'flv', 'avi', 'mov']
+CACHE_KEY_VERSION = "hqv2"
 
 
 @dataclass
@@ -62,11 +63,42 @@ class DownloadProgressTracker:
     """Tracks download progress and final file path"""
     def __init__(self):
         self.final_file_path: Optional[str] = None
+        self.selected_format: Optional[dict] = None
     
     def create_hook(self):
         """Create a progress hook function"""
         def progress_hook(d):
             status = d.get('status')
+
+            if self.selected_format is None:
+                info = d.get('info_dict') if isinstance(d, dict) else None
+                if isinstance(info, dict):
+                    requested = info.get('requested_formats') or []
+                    video_req = next(
+                        (f for f in requested if isinstance(f, dict) and f.get('vcodec') not in (None, 'none')),
+                        {}
+                    )
+                    audio_req = next(
+                        (f for f in requested if isinstance(f, dict) and f.get('acodec') not in (None, 'none') and f.get('vcodec') in (None, 'none')),
+                        {}
+                    )
+                    selected = {
+                        'format_id': info.get('format_id'),
+                        'format_note': info.get('format_note'),
+                        'height': info.get('height'),
+                        'width': info.get('width'),
+                        'fps': info.get('fps'),
+                        'vcodec': info.get('vcodec'),
+                        'acodec': info.get('acodec'),
+                        'tbr': info.get('tbr'),
+                        'video_format_id': video_req.get('format_id'),
+                        'video_height': video_req.get('height'),
+                        'video_tbr': video_req.get('tbr'),
+                        'audio_format_id': audio_req.get('format_id'),
+                        'audio_abr': audio_req.get('abr'),
+                    }
+                    if any(value is not None for value in selected.values()):
+                        self.selected_format = selected
             
             # Capture final file path when download finishes
             if status == 'finished':
@@ -80,22 +112,27 @@ class DownloadProgressTracker:
                 percent_str = d.get('_percent_str', '')
                 if percent_str:
                     try:
-                        percent_float = float(percent_str.strip('%'))
+                        # yt-dlp may include ANSI escape codes in _percent_str
+                        cleaned_percent = re.sub(r'\x1b\[[0-9;]*m', '', str(percent_str))
+                        percent_match = re.search(r'(\d+(?:\.\d+)?)', cleaned_percent)
+                        if percent_match:
+                            percent_float = float(percent_match.group(1))
                     except (ValueError, TypeError):
                         pass
                 
                 # If percent_str not available, calculate from bytes
                 if percent_float is None:
                     downloaded = d.get('downloaded_bytes')
-                    total = d.get('total_bytes')
+                    total = d.get('total_bytes') or d.get('total_bytes_estimate')
                     if downloaded is not None and total is not None and total > 0:
                         percent_float = (downloaded / total) * 100
                 
+                total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate')
                 progress_data = {
                     'type': 'progress',
                     'percent': percent_float,
                     'downloaded_bytes': d.get('downloaded_bytes'),
-                    'total_bytes': d.get('total_bytes'),
+                    'total_bytes': total_bytes,
                     'speed': d.get('_speed_str', 'N/A'),
                     'eta': d.get('_eta_str', 'N/A')
                 }
@@ -177,6 +214,146 @@ class YouTubeDownloader:
             path.parent.mkdir(parents=True, exist_ok=True)
         except (OSError, PermissionError) as e:
             raise ValueError(f"Cannot create output directory: {e}")
+
+    @staticmethod
+    def _build_format_selectors(quality: str) -> List[str]:
+        """Build format selectors with no silent progressive fallback."""
+        candidates = [
+            quality.strip() if quality else "",
+            "bestvideo*+bestaudio",
+            "bv*+ba",
+            "bestvideo+bestaudio",
+        ]
+        selectors: List[str] = []
+        for selector in candidates:
+            if selector and selector not in selectors:
+                selectors.append(selector)
+        return selectors
+
+    @staticmethod
+    def _build_restricted_format_selectors() -> List[str]:
+        """Fallback selectors for restricted videos where HQ streams return 403."""
+        return [
+            "best[ext=mp4][vcodec!=none][acodec!=none]",
+            "best[vcodec!=none][acodec!=none]",
+            "best[ext=mp4]/best",
+        ]
+
+    @staticmethod
+    def _is_access_restriction_error(error_message: str) -> bool:
+        msg = error_message.lower()
+        patterns = [
+            "403",
+            "forbidden",
+            "confirm you’re not a bot",
+            "confirm you're not a bot",
+            "too many requests",
+            "http error 429",
+            "requested format is not available",
+        ]
+        return any(pattern in msg for pattern in patterns)
+
+    @staticmethod
+    def _cache_key(video_id: str) -> str:
+        return f"{video_id}_{CACHE_KEY_VERSION}"
+
+    @staticmethod
+    def _is_truthy_env(var_name: str, default: bool = False) -> bool:
+        value = os.environ.get(var_name)
+        if value is None:
+            return default
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+    @staticmethod
+    def _browser_cookie_candidate() -> Optional[str]:
+        browser = os.environ.get('YT_DLP_COOKIES_BROWSER', 'chrome').strip().lower()
+        return browser or None
+
+    @staticmethod
+    def _extract_format_capabilities(url: str) -> dict:
+        """Inspect available formats so we can compare selected vs max possible quality."""
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception:
+            return {
+                'max_adaptive_height': None,
+                'max_progressive_height': None,
+            }
+
+        formats = info.get('formats') or []
+        adaptive_heights = [
+            f.get('height')
+            for f in formats
+            if f.get('height') and f.get('vcodec') not in (None, 'none') and f.get('acodec') in (None, 'none')
+        ]
+        progressive_heights = [
+            f.get('height')
+            for f in formats
+            if f.get('height') and f.get('vcodec') not in (None, 'none') and f.get('acodec') not in (None, 'none')
+        ]
+        return {
+            'max_adaptive_height': max(adaptive_heights) if adaptive_heights else None,
+            'max_progressive_height': max(progressive_heights) if progressive_heights else None,
+        }
+
+    @staticmethod
+    def _emit_debug_event(event_type: str, payload: dict) -> None:
+        try:
+            print(json.dumps({'type': event_type, **payload}), file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _probe_video_height(file_path: Path) -> Optional[int]:
+        """Read video height via ffprobe for cache quality validation."""
+        try:
+            result = subprocess.run(
+                [
+                    'ffprobe',
+                    '-v',
+                    'error',
+                    '-select_streams',
+                    'v:0',
+                    '-show_entries',
+                    'stream=height',
+                    '-of',
+                    'json',
+                    str(file_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            payload = json.loads(result.stdout)
+            streams = payload.get('streams') or []
+            if not streams:
+                return None
+            height = streams[0].get('height')
+            return int(height) if isinstance(height, int) else None
+        except Exception:
+            return None
+
+    def _cleanup_incomplete_download_files(self, temp_dir: Path, cache_video_id: str) -> None:
+        """Delete stale partial files before retrying with another selector."""
+        for file_path in temp_dir.glob(f"{cache_video_id}*"):
+            name = file_path.name.lower()
+            if (
+                name.endswith(INCOMPLETE_FILE_EXTENSIONS)
+                or ".part-" in name
+                or name.endswith(".tmp")
+            ):
+                try:
+                    file_path.unlink()
+                except OSError:
+                    pass
     
     @staticmethod
     def _is_cut_file(filename: str) -> bool:
@@ -571,7 +748,7 @@ class YouTubeDownloader:
         url: str, 
         output_path: str,
         download_from_start: bool = False,
-        quality: str = 'bestvideo+bestaudio/best',
+        quality: str = 'bestvideo*+bestaudio',
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         sections: Optional[List[Tuple[Optional[int], Optional[int]]]] = None
@@ -624,14 +801,29 @@ class YouTubeDownloader:
         
         # Initialize progress tracker
         progress_tracker = DownloadProgressTracker()
+        format_caps = self._extract_format_capabilities(url)
+        allow_low_quality = self._is_truthy_env('YT_DLP_ALLOW_LOW_QUALITY_FALLBACK', default=False)
+        self._emit_debug_event(
+            'quality_debug',
+            {
+                'event': 'format_capabilities',
+                'max_adaptive_height': format_caps.get('max_adaptive_height'),
+                'max_progressive_height': format_caps.get('max_progressive_height'),
+                'allow_low_quality_fallback': allow_low_quality,
+            },
+        )
+        successful_profile_name: Optional[str] = None
+        successful_selector: Optional[str] = None
         
         # Check for cached video first (use original video_id for backward compatibility)
-        cached_video_path = self._get_cached_video_path(video_info.id)
+        cache_video_id = self._cache_key(video_info.id)
+        cached_video_path = self._get_cached_video_path(cache_video_id)
         original_file_path: Optional[Path] = None
+        use_cached_file = False
         
         if cached_video_path:
-            original_file_path = Path(cached_video_path)
-            if not original_file_path.exists() or not self._is_valid_video_file(original_file_path):
+            cached_candidate = Path(cached_video_path)
+            if not cached_candidate.exists() or not self._is_valid_video_file(cached_candidate):
                 return DownloadResult(
                     success=False,
                     file_path=None,
@@ -639,93 +831,183 @@ class YouTubeDownloader:
                     error_message="Cached video file not found or invalid",
                     video_info=video_info
                 )
-        else:
+
+            max_adaptive_height = format_caps.get('max_adaptive_height')
+            cached_height = self._probe_video_height(cached_candidate)
+            self._emit_debug_event(
+                'quality_debug',
+                {
+                    'event': 'cached_file_detected',
+                    'cache_path': str(cached_candidate),
+                    'cached_height': cached_height,
+                    'max_adaptive_height': max_adaptive_height,
+                },
+            )
+            if (
+                isinstance(max_adaptive_height, int)
+                and max_adaptive_height >= 720
+                and isinstance(cached_height, int)
+                and cached_height < max_adaptive_height
+                and not allow_low_quality
+            ):
+                self._emit_debug_event(
+                    'quality_debug',
+                    {
+                        'event': 'cached_file_rejected_for_quality',
+                        'cached_height': cached_height,
+                        'required_height': max_adaptive_height,
+                    },
+                )
+            else:
+                original_file_path = cached_candidate
+                use_cached_file = True
+
+        if not use_cached_file:
             # Download the video
             temp_dir = self._get_temp_dir()
             # Use original video_id for download path to match original behavior and cached files
             # The video_id is already validated from YouTube, so it should be safe
-            download_output_path = str(temp_dir / f'{video_info.id}.%(ext)s')
+            download_output_path = str(temp_dir / f'{cache_video_id}.%(ext)s')
             
-            # Format selectors to try in order (most preferred first)
-            format_selectors = [
-                quality,  # Try user-specified format first
-                'bestvideo+bestaudio/best',  # Try best video+audio combo
-                'best[ext=mp4]/best[ext=webm]/best',  # Try mp4, then webm, then any
-                'best',  # Fallback to any best format
+            # Try highest quality first, then restricted-client progressive fallback.
+            attempt_profiles = [
+                {
+                    "name": "hq",
+                    "selectors": self._build_format_selectors(quality),
+                    "extra_opts": {},
+                },
             ]
-            
+
+            # Optional authenticated HQ retry using browser cookies.
+            # This is the most reliable way to unlock adaptive high-quality streams.
+            if self._is_truthy_env('YT_DLP_ENABLE_BROWSER_COOKIES', default=False):
+                browser = self._browser_cookie_candidate()
+                if browser:
+                    attempt_profiles.append(
+                        {
+                            "name": f"hq_cookie_{browser}",
+                            "selectors": self._build_format_selectors(quality),
+                            "extra_opts": {
+                                "cookiesfrombrowser": (browser,),
+                            },
+                        }
+                    )
+
+            attempt_profiles.append(
+                {
+                    "name": "restricted_progressive",
+                    "selectors": self._build_restricted_format_selectors(),
+                    "extra_opts": {
+                        "extractor_args": {
+                            "youtube": {
+                                "player_client": ["web", "android"],
+                            }
+                        }
+                    },
+                }
+            )
+
             last_error = None
+            download_succeeded = False
             
             # Check if SSL certificate verification should be disabled
             skip_cert_check = os.environ.get('YT_DLP_SKIP_CERT_CHECK', 'false').lower() == 'true'
             
-            for format_selector in format_selectors:
-                progress_hook = progress_tracker.create_hook()
-                
-                # Common options to help with 403 errors and ensure complete downloads
-                base_opts = {
-                    'outtmpl': download_output_path,
-                    'format': format_selector,
-                    'progress_hooks': [progress_hook],
-                    'quiet': True,
-                    'no_warnings': True,
-                    'retries': 10,
-                    'fragment_retries': 10,
-                    'file_access_retries': 3,
-                    'sleep_interval': 1,
-                    'max_sleep_interval': 5,
-                    'sleep_interval_requests': 1,
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['android', 'web'],
+            for profile in attempt_profiles:
+                format_selectors = profile["selectors"]
+                extra_opts = profile["extra_opts"]
+
+                for format_selector in format_selectors:
+                    self._emit_debug_event(
+                        'quality_debug',
+                        {
+                            'event': 'attempt',
+                            'profile': profile.get('name'),
+                            'selector': format_selector,
+                        },
+                    )
+                    self._cleanup_incomplete_download_files(temp_dir, cache_video_id)
+                    progress_hook = progress_tracker.create_hook()
+
+                    # Common options to help with 403 errors and ensure complete downloads
+                    base_opts = {
+                        'outtmpl': download_output_path,
+                        'format': format_selector,
+                        'progress_hooks': [progress_hook],
+                        'quiet': True,
+                        'no_warnings': True,
+                        'retries': 10,
+                        'fragment_retries': 10,
+                        'file_access_retries': 3,
+                        'sleep_interval': 1,
+                        'max_sleep_interval': 5,
+                        'sleep_interval_requests': 1,
+                        'continuedl': False,
+                    }
+
+                    # Let yt-dlp merge highest quality streams using bundled/system ffmpeg.
+                    ffmpeg_location = os.environ.get('FFMPEG_PATH')
+                    if ffmpeg_location:
+                        base_opts['ffmpeg_location'] = ffmpeg_location
+
+                    if extra_opts:
+                        base_opts.update(extra_opts)
+
+                    # Only skip certificate check if explicitly enabled via environment variable
+                    if skip_cert_check:
+                        base_opts['nocheckcertificate'] = True
+
+                    # For live streams, handle download options
+                    if video_info.is_live and not download_from_start:
+                        ydl_opts = {
+                            **base_opts,
+                            'live_recording_duration': 3600,  # 1 hour max for live
+                            'live_from_start': False,
                         }
-                    },
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'en-us,en;q=0.5',
-                        'Accept-Encoding': 'gzip, deflate',
-                        'Connection': 'keep-alive',
-                    },
-                }
-                
-                # Only skip certificate check if explicitly enabled via environment variable
-                if skip_cert_check:
-                    base_opts['nocheckcertificate'] = True
-                
-                # For live streams, handle download options
-                if video_info.is_live and not download_from_start:
-                    ydl_opts = {
-                        **base_opts,
-                        'live_recording_duration': 3600,  # 1 hour max for live
-                        'live_from_start': False,
-                    }
-                else:
-                    ydl_opts = {
-                        **base_opts,
-                        'live_from_start': download_from_start,
-                    }
-                
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
-                        # Wait for file operations to complete
-                        time.sleep(DOWNLOAD_COMPLETION_WAIT)
-                        break
-                except yt_dlp.utils.DownloadError as e:
-                    last_error = e
-                    error_msg = str(e)
-                    # If format not available, try next format selector
-                    if 'Requested format is not available' in error_msg or 'format is not available' in error_msg.lower():
+                    else:
+                        ydl_opts = {
+                            **base_opts,
+                            'live_from_start': download_from_start,
+                        }
+
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([url])
+                            # Wait for file operations to complete
+                            time.sleep(DOWNLOAD_COMPLETION_WAIT)
+                            last_error = None
+                            download_succeeded = True
+                            successful_profile_name = profile.get('name')
+                            successful_selector = format_selector
+                            break
+                    except yt_dlp.utils.DownloadError as e:
+                        last_error = e
+                        error_msg = str(e)
+                        error_msg_lower = error_msg.lower()
+                        # If merge failed due missing ffmpeg, do not silently degrade quality
+                        if 'ffmpeg' in error_msg_lower and (
+                            'merge' in error_msg_lower
+                            or 'merger' in error_msg_lower
+                            or 'postprocess' in error_msg_lower
+                            or 'post-process' in error_msg_lower
+                        ):
+                            return DownloadResult(
+                                success=False,
+                                file_path=None,
+                                file_size=None,
+                                error_message='FFmpeg is required to merge best quality video+audio streams. Please install/configure FFmpeg and try again.',
+                                video_info=video_info
+                            )
+                        # Retry with another selector/profile. We intentionally do not
+                        # raise here to avoid hard-failing on transient/content-specific
+                        # errors that another selector/client can recover from.
                         continue
-                    # If 403 error, try next format selector
-                    if '403' in error_msg or 'Forbidden' in error_msg:
+                    except Exception as e:
+                        last_error = e
                         continue
-                    # For other download errors, re-raise
-                    raise
-                except Exception as e:
-                    last_error = e
-                    raise
+
+                if download_succeeded:
+                    break
             
             # Check if download succeeded
             if last_error and not original_file_path:
@@ -741,14 +1023,14 @@ class YouTubeDownloader:
             # Find the downloaded file
             try:
                 found_file = self._find_downloaded_file(
-                    video_info.id,  # Use original video_id to match download path
+                    cache_video_id,
                     temp_dir,
                     progress_tracker
                 )
                 
                 if not found_file:
                     # Check if there are .part files (incomplete download)
-                    part_files = list(temp_dir.glob(f'{video_info.id}*.part'))
+                    part_files = list(temp_dir.glob(f'{cache_video_id}*.part'))
                     if part_files:
                         return DownloadResult(
                             success=False,
@@ -766,6 +1048,15 @@ class YouTubeDownloader:
                     )
                 
                 original_file_path = found_file
+                self._emit_debug_event(
+                    'quality_debug',
+                    {
+                        'event': 'selected_format',
+                        'profile': successful_profile_name,
+                        'selector': successful_selector,
+                        'selected_format': progress_tracker.selected_format,
+                    },
+                )
                 
             except Exception as e:
                 return DownloadResult(
@@ -785,6 +1076,39 @@ class YouTubeDownloader:
                 error_message="Downloaded file is invalid or incomplete",
                 video_info=video_info
             )
+
+        selected_height = None
+        if progress_tracker.selected_format:
+            selected_height = (
+                progress_tracker.selected_format.get('video_height')
+                or progress_tracker.selected_format.get('height')
+            )
+        max_adaptive_height = format_caps.get('max_adaptive_height')
+        if (
+            successful_profile_name == "restricted_progressive"
+            and isinstance(selected_height, int)
+            and isinstance(max_adaptive_height, int)
+            and max_adaptive_height >= 720
+            and selected_height < max_adaptive_height
+            and not allow_low_quality
+        ):
+            try:
+                if original_file_path and original_file_path.exists():
+                    original_file_path.unlink()
+            except OSError:
+                pass
+            return DownloadResult(
+                success=False,
+                file_path=None,
+                file_size=None,
+                error_message=(
+                    f"High-quality stream is available up to {max_adaptive_height}p, "
+                    f"but YouTube blocked adaptive download and only {selected_height}p progressive succeeded. "
+                    "Enable browser cookies (YT_DLP_ENABLE_BROWSER_COOKIES=true, YT_DLP_COOKIES_BROWSER=chrome) "
+                    "or set YT_DLP_ALLOW_LOW_QUALITY_FALLBACK=true to permit low-quality fallback."
+                ),
+                video_info=video_info
+            )
         
         # Ensure the full video is stored in temp directory before processing
         # Verify the file is actually in temp directory and is stable
@@ -802,7 +1126,7 @@ class YouTubeDownloader:
         
         if not is_in_temp:
             # File is not in temp directory, ensure it's copied there for caching
-            temp_file_path = temp_dir / f'{video_info.id}{original_file_path.suffix}'
+            temp_file_path = temp_dir / f'{cache_video_id}{original_file_path.suffix}'
             try:
                 if not temp_file_path.exists() or not self._is_valid_video_file(temp_file_path):
                     shutil.copy2(str(original_file_path), str(temp_file_path))
@@ -1109,7 +1433,7 @@ def main():
     # Regular download mode
     url = sys.argv[1]
     download_from_start = len(sys.argv) > 2 and sys.argv[2].lower() == 'true'
-    quality = sys.argv[3] if len(sys.argv) > 3 else 'bestvideo+bestaudio/best'
+    quality = sys.argv[3] if len(sys.argv) > 3 else 'bestvideo*+bestaudio'
     start_time = None
     end_time = None
     sections = None

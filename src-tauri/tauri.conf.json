@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "YouTube Downloader",
+  "version": "2.0.0",
+  "identifier": "com.ytdownloader.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm dev:renderer",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "YouTube Downloader",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' http://localhost:5173 ws://localhost:5173;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "nsis", "appimage", "deb", "rpm"],
+    "resources": {
+      "resources/python": "python",
+      "resources/ffmpeg": "ffmpeg"
+    },
+    "icon": [
+      "../build/icons/icon.png",
+      "../build/icons/icon_512x512.png",
+      "../build/icons/icon.icns",
+      "../build/icons/icon.ico"
+    ]
+  }
+}
