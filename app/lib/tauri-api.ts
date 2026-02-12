@@ -28,6 +28,11 @@ export interface LogInfo {
   isPackaged: boolean;
 }
 
+export interface YouTubeAuthStatus {
+  connected: boolean;
+  detectedBrowser: string | null;
+}
+
 let unlistenDownloadProgress: UnlistenFn | null = null;
 
 function ensureTauriRuntime() {
@@ -119,6 +124,11 @@ export const tauriAPI = {
   async getLogPath(): Promise<LogInfo> {
     ensureTauriRuntime();
     return invoke("get_log_info");
+  },
+
+  async getYouTubeAuthStatus(): Promise<YouTubeAuthStatus> {
+    ensureTauriRuntime();
+    return invoke("get_youtube_auth_status");
   },
 
   onDownloadProgress(callback: (data: DownloadProgressData) => void): void {

@@ -894,6 +894,39 @@ class TestExtractVideoInfo:
             assert result.is_live is False
             assert result.is_scheduled is False
 
+    def test_extract_retries_with_browser_cookies_on_bot_error(self, sample_video_info):
+        """Extraction should retry with browser cookies when enabled."""
+        attempted_opts = []
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def extract_info(self, _url, download=False):
+                if self.opts.get('cookiesfrombrowser') == ('chrome',):
+                    return sample_video_info
+                raise yt_dlp.utils.DownloadError("Sign in to confirm you’re not a bot")
+
+        with patch('downloader.yt_dlp.YoutubeDL', side_effect=lambda opts: MockYDL(opts)):
+            with patch.dict(
+                os.environ,
+                {'YT_DLP_ENABLE_BROWSER_COOKIES': 'true', 'YT_DLP_COOKIES_BROWSER': 'chrome'},
+                clear=False,
+            ):
+                downloader = YouTubeDownloader()
+                result = downloader.extract_video_info('https://youtube.com/watch?v=test')
+                assert result is not None
+                assert result.id == sample_video_info['id']
+                assert attempted_opts[0].get('cookiesfrombrowser') is None
+                assert any(opts.get('cookiesfrombrowser') == ('chrome',) for opts in attempted_opts)
+
 
 # ============================================================================
 # Cache Tests
@@ -1675,10 +1708,37 @@ class TestDownloadVideo:
                     )
     
     def test_build_format_selectors_excludes_progressive_best(self):
-        """Format selectors must not silently fall back to low-quality progressive best."""
+        """Default selectors should prioritize MP4-compatible formats."""
         selectors = YouTubeDownloader._build_format_selectors('bestvideo*+bestaudio')
-        assert selectors == ['bestvideo*+bestaudio', 'bv*+ba', 'bestvideo+bestaudio']
-        assert 'best' not in selectors
+        assert selectors == [
+            'bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]',
+            'bestvideo[ext=mp4][vcodec!=none]+bestaudio[acodec!=none]',
+            'best[ext=mp4][vcodec!=none][acodec!=none]',
+            'best[ext=mp4]/best',
+        ]
+
+    def test_browser_cookie_candidates_support_csv(self):
+        with patch.dict(os.environ, {'YT_DLP_COOKIES_BROWSER': 'chrome, edge,firefox'}, clear=False):
+            candidates = YouTubeDownloader._browser_cookie_candidates()
+            assert candidates[:3] == ['chrome', 'edge', 'firefox']
+
+    def test_browser_cookie_candidates_no_fallback_when_disabled(self):
+        with patch.dict(os.environ, {'YT_DLP_COOKIES_BROWSER': 'arc'}, clear=False):
+            candidates = YouTubeDownloader._browser_cookie_candidates(include_default_fallback=False)
+            assert candidates == ['arc']
+
+    def test_cookiesfrombrowser_option_maps_arc_to_chrome_profile(self):
+        downloader = YouTubeDownloader()
+        with patch.object(downloader, '_arc_cookie_profile_path', return_value='/tmp/arc-default'):
+            assert downloader._cookiesfrombrowser_option('arc') == ('chrome', '/tmp/arc-default')
+
+    def test_resolve_ffmpeg_location_for_ytdlp_falls_back_to_binary_name(self):
+        downloader = YouTubeDownloader()
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(downloader, '_validate_ffmpeg_path', return_value='/usr/local/bin/ffmpeg') as mock_validate:
+                resolved = downloader._resolve_ffmpeg_location_for_ytdlp()
+                assert resolved == '/usr/local/bin/ffmpeg'
+                mock_validate.assert_called_with('ffmpeg')
 
     def test_download_format_selector_fallback(self, temp_dir, sample_video_info):
         """Test HQ format selector fallback order on unavailable formats."""
@@ -1733,8 +1793,10 @@ class TestDownloadVideo:
                                         )
                                         assert result.success is True
                                         attempted_non_empty = [fmt for fmt in attempted_formats if fmt]
-                                        assert attempted_non_empty[:2] == ['nonexistent', 'bestvideo*+bestaudio']
-                                        assert 'best' not in attempted_non_empty
+                                        assert attempted_non_empty[:2] == [
+                                            'nonexistent',
+                                            'bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]',
+                                        ]
 
     def test_download_ffmpeg_merge_error_does_not_fallback_to_progressive(self, temp_dir, sample_video_info):
         """If ffmpeg merge is unavailable, fail explicitly instead of downloading low quality."""
@@ -1778,7 +1840,57 @@ class TestDownloadVideo:
                         assert result.success is False
                         assert 'FFmpeg is required' in (result.error_message or '')
                         attempted_non_empty = [fmt for fmt in attempted_formats if fmt]
-                        assert attempted_non_empty == ['bestvideo*+bestaudio']
+                        assert attempted_non_empty == [
+                            'bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]'
+                        ]
+
+    def test_download_ffmpeg_merging_error_does_not_fallback_to_progressive(self, temp_dir, sample_video_info):
+        """If yt-dlp reports `merging` wording, fail explicitly instead of low quality fallback."""
+        output_file = temp_dir / 'output.mp4'
+        attempted_formats = []
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_formats.append(opts.get('format'))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                raise yt_dlp.utils.DownloadError(
+                    'ERROR: You have requested merging of multiple formats but ffmpeg is not installed. Aborting due to --abort-on-error'
+                )
+
+        downloader = YouTubeDownloader()
+        with patch.object(downloader, 'extract_video_info', return_value=VideoInfo(
+            id=sample_video_info['id'],
+            title=sample_video_info['title'],
+            duration=sample_video_info['duration'],
+            is_live=False,
+            is_scheduled=False,
+            scheduled_start_time=None,
+            thumbnail=None,
+            uploader=None,
+            view_count=None,
+            upload_date=None
+        )):
+            with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
+                with patch.object(downloader, '_get_cached_video_path', return_value=None):
+                    with patch('downloader.yt_dlp.YoutubeDL', side_effect=lambda opts: MockYDL(opts)):
+                        result = downloader.download_video(
+                            'https://youtube.com/watch?v=test',
+                            str(output_file),
+                            quality='bestvideo*+bestaudio'
+                        )
+                        assert result.success is False
+                        assert 'FFmpeg is required' in (result.error_message or '')
+                        attempted_non_empty = [fmt for fmt in attempted_formats if fmt]
+                        assert attempted_non_empty == [
+                            'bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]'
+                        ]
 
     def test_download_falls_back_to_restricted_progressive_on_403(self, temp_dir, sample_video_info):
         """When HQ streams are blocked (403), fallback profile should download progressive format."""
@@ -1828,7 +1940,11 @@ class TestDownloadVideo:
                                 mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b'copied data')
                                 with patch('downloader.yt_dlp.YoutubeDL', side_effect=lambda opts: MockYDL(opts)):
                                     with patch('downloader.time.sleep'):
-                                        with patch.dict(os.environ, {'YT_DLP_ALLOW_LOW_QUALITY_FALLBACK': 'true'}):
+                                        with patch.dict(
+                                            os.environ,
+                                            {'YT_DLP_ALLOW_LOW_QUALITY_FALLBACK': 'true'},
+                                            clear=False,
+                                        ):
                                             result = downloader.download_video(
                                                 'https://youtube.com/watch?v=test',
                                                 str(output_file),
@@ -1954,6 +2070,84 @@ class TestDownloadVideo:
                                         assert result.success is False
                                         assert 'High-quality stream is available up to 1080p' in (result.error_message or '')
 
+    def test_download_reports_cookie_attempt_failure_when_enabled(self, temp_dir, sample_video_info):
+        """If cookies were enabled but HQ is still blocked, error should reflect attempted cookie auth."""
+        output_file = temp_dir / 'output.mp4'
+        downloaded_file = temp_dir / f"{sample_video_info['id']}_{CACHE_KEY_VERSION}.mp4"
+        downloaded_file.write_bytes(b'video data')
+
+        class MockYDL:
+            def __init__(self, opts):
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                if self.opts.get('cookiesfrombrowser'):
+                    raise yt_dlp.utils.DownloadError('Could not decrypt Chrome cookies')
+                extractor_args = self.opts.get('extractor_args') or {}
+                if extractor_args.get('youtube', {}).get('player_client') == ['web', 'android']:
+                    hooks = self.opts.get('progress_hooks') or []
+                    for hook in hooks:
+                        hook({
+                            'status': 'downloading',
+                            'downloaded_bytes': 100,
+                            'total_bytes': 100,
+                            'info_dict': {
+                                'format_id': '18',
+                                'height': 360,
+                                'vcodec': 'avc1.42001E',
+                                'acodec': 'mp4a.40.2',
+                            },
+                        })
+                        hook({
+                            'status': 'finished',
+                            'filename': str(downloaded_file),
+                        })
+                    return None
+                raise yt_dlp.utils.DownloadError('HTTP Error 403: Forbidden')
+
+        downloader = YouTubeDownloader()
+        with patch.object(downloader, '_extract_format_capabilities', return_value={
+            'max_adaptive_height': 1080,
+            'max_progressive_height': 360,
+        }):
+            with patch.object(downloader, 'extract_video_info', return_value=VideoInfo(
+                id=sample_video_info['id'],
+                title=sample_video_info['title'],
+                duration=sample_video_info['duration'],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None
+            )):
+                with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
+                    with patch.object(downloader, '_get_cached_video_path', return_value=None):
+                        with patch.object(downloader, '_find_downloaded_file', return_value=downloaded_file):
+                            with patch.object(downloader, '_check_file_stability', return_value=True):
+                                with patch('downloader.shutil.copy2') as mock_copy:
+                                    mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b'copied data')
+                                    with patch('downloader.yt_dlp.YoutubeDL', side_effect=lambda opts: MockYDL(opts)):
+                                        with patch.dict(
+                                            os.environ,
+                                            {'YT_DLP_ENABLE_BROWSER_COOKIES': 'true', 'YT_DLP_COOKIES_BROWSER': 'chrome'},
+                                        ):
+                                            result = downloader.download_video(
+                                                'https://youtube.com/watch?v=test',
+                                                str(output_file),
+                                                quality='bestvideo*+bestaudio'
+                                            )
+                                            assert result.success is False
+                                            assert 'Browser cookies were enabled' in (result.error_message or '')
+                                            assert 'Could not decrypt Chrome cookies' in (result.error_message or '')
+
     def test_download_sets_ffmpeg_location_for_ytdlp(self, temp_dir, sample_video_info):
         """Ensure yt-dlp gets ffmpeg_location so bestvideo+bestaudio formats can be merged."""
         output_file = temp_dir / 'output.mp4'
@@ -1996,12 +2190,124 @@ class TestDownloadVideo:
                                 mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b'copied data')
                                 with patch('downloader.yt_dlp.YoutubeDL', side_effect=lambda opts: MockYDL(opts)):
                                     with patch.dict(os.environ, {'FFMPEG_PATH': '/tmp/ffmpeg'}):
+                                        with patch.object(downloader, '_validate_ffmpeg_path', return_value='/tmp/ffmpeg'):
+                                            result = downloader.download_video(
+                                                'https://youtube.com/watch?v=test',
+                                                str(output_file)
+                                            )
+                                            assert result.success is True
+                                            assert captured_opts.get('ffmpeg_location') == '/tmp/ffmpeg'
+
+    def test_requires_mp4_compatibility_transcode_for_non_mp4_source(self):
+        """Non-mp4 source should be transcoded when user requests .mp4 output."""
+        assert YouTubeDownloader._requires_mp4_compatibility_transcode(
+            Path('/tmp/source.webm'),
+            Path('/tmp/output.mp4'),
+            None,
+        ) is True
+
+    def test_download_transcodes_non_mp4_source_for_mp4_output(self, temp_dir, sample_video_info):
+        """When source is webm and output is mp4, downloader should run compatibility transcode."""
+        output_file = temp_dir / 'output.mp4'
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.webm"
+        downloaded_file.write_bytes(b'video data')
+
+        downloader = YouTubeDownloader()
+
+        class MockYDL:
+            def __init__(self, _opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                return None
+
+        with patch.object(downloader, 'extract_video_info', return_value=VideoInfo(
+            id=sample_video_info['id'],
+            title=sample_video_info['title'],
+            duration=sample_video_info['duration'],
+            is_live=False,
+            is_scheduled=False,
+            scheduled_start_time=None,
+            thumbnail=None,
+            uploader=None,
+            view_count=None,
+            upload_date=None
+        )):
+            with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
+                with patch.object(downloader, '_get_cached_video_path', return_value=None):
+                    with patch.object(downloader, '_find_downloaded_file', return_value=downloaded_file):
+                        with patch.object(downloader, '_check_file_stability', return_value=True):
+                            with patch('downloader.shutil.copy2') as mock_copy:
+                                mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b'copied data')
+                                with patch('downloader.yt_dlp.YoutubeDL', side_effect=lambda opts: MockYDL(opts)):
+                                    with patch.object(
+                                        downloader,
+                                        '_transcode_to_quicktime_mp4',
+                                        side_effect=lambda src, dst: (Path(dst).write_bytes(b'qtmp4') or True),
+                                    ) as mock_transcode:
                                         result = downloader.download_video(
                                             'https://youtube.com/watch?v=test',
                                             str(output_file)
                                         )
                                         assert result.success is True
-                                        assert captured_opts.get('ffmpeg_location') == '/tmp/ffmpeg'
+                                        mock_transcode.assert_called_once()
+                                        called_src, called_dst = mock_transcode.call_args.args
+                                        assert called_src == downloaded_file
+                                        assert called_dst == output_file
+
+    def test_download_fails_when_mp4_compat_transcode_fails(self, temp_dir, sample_video_info):
+        """If compatibility transcode fails, downloader should return clear failure."""
+        output_file = temp_dir / 'output.mp4'
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.webm"
+        downloaded_file.write_bytes(b'video data')
+
+        downloader = YouTubeDownloader()
+
+        class MockYDL:
+            def __init__(self, _opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                return None
+
+        with patch.object(downloader, 'extract_video_info', return_value=VideoInfo(
+            id=sample_video_info['id'],
+            title=sample_video_info['title'],
+            duration=sample_video_info['duration'],
+            is_live=False,
+            is_scheduled=False,
+            scheduled_start_time=None,
+            thumbnail=None,
+            uploader=None,
+            view_count=None,
+            upload_date=None
+        )):
+            with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
+                with patch.object(downloader, '_get_cached_video_path', return_value=None):
+                    with patch.object(downloader, '_find_downloaded_file', return_value=downloaded_file):
+                        with patch.object(downloader, '_check_file_stability', return_value=True):
+                            with patch('downloader.shutil.copy2') as mock_copy:
+                                mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b'copied data')
+                                with patch('downloader.yt_dlp.YoutubeDL', side_effect=lambda opts: MockYDL(opts)):
+                                    with patch.object(downloader, '_transcode_to_quicktime_mp4', return_value=False):
+                                        result = downloader.download_video(
+                                            'https://youtube.com/watch?v=test',
+                                            str(output_file)
+                                        )
+                                        assert result.success is False
+                                        assert 'QuickTime-compatible' in (result.error_message or '')
     
     def test_download_live_stream(self, temp_dir, mock_ytdlp_download, sample_live_video_info):
         """Test downloading live stream"""

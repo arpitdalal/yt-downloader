@@ -3,6 +3,7 @@ import {
   tauriAPI,
   type VideoInfo,
   type DownloadProgressData,
+  type YouTubeAuthStatus,
 } from "./lib/tauri-api.js";
 
 type DownloadStatus =
@@ -23,6 +24,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus>({
+    connected: false,
+    detectedBrowser: null,
+  });
 
   // Set up progress listener
   useEffect(() => {
@@ -56,6 +61,19 @@ export default function App() {
     };
   }, [status]);
 
+  const refreshYouTubeAuthStatus = async () => {
+    try {
+      const authStatus = await tauriAPI.getYouTubeAuthStatus();
+      setYoutubeAuth(authStatus);
+    } catch (err) {
+      console.error("Failed to fetch YouTube auth status:", err);
+    }
+  };
+
+  useEffect(() => {
+    void refreshYouTubeAuthStatus();
+  }, []);
+
   const getErrorMessage = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
 
@@ -86,6 +104,15 @@ export default function App() {
       message.includes("Requested format")
     ) {
       return "The requested video quality is not available. Please try again.";
+    }
+    if (
+      message.includes("Sign in to confirm you’re not a bot") ||
+      message.includes("Sign in to confirm you're not a bot")
+    ) {
+      return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
+    }
+    if (message.includes("YOUTUBE_AUTH")) {
+      return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
     }
     if (message.includes("High-quality stream is available up to")) {
       return message;
@@ -291,7 +318,6 @@ export default function App() {
           setStatus("error");
           return;
         }
-
         // Convert sections to format expected by backend
         const sectionsArray = sections.map((s) => ({
           start: s.start.trim() ? parseInt(s.start.trim(), 10) : null,
@@ -310,7 +336,6 @@ export default function App() {
         );
       } else {
         // Handle YouTube download
-        // Step 1: Extract video info
         setStatus("extracting");
         const info = await tauriAPI.extractVideoInfo(url.trim());
 
@@ -338,6 +363,7 @@ export default function App() {
           setStatus("error");
           return;
         }
+        const savePath = dialogResult.filePath;
 
         // Step 3: Start download
         setStatus("downloading");
@@ -351,7 +377,7 @@ export default function App() {
 
         const result = await tauriAPI.downloadVideo({
           url: url.trim(),
-          savePath: dialogResult.filePath,
+          savePath,
           sections: sectionsArray,
         });
 
@@ -409,6 +435,17 @@ export default function App() {
               Download and cut YouTube videos with custom start and end times
             </p>
           </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-sm p-4 sm:p-6 mb-4 border border-gray-200">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-1">
+            YouTube
+          </h2>
+          <p className="text-sm text-gray-600">
+            {youtubeAuth.connected && youtubeAuth.detectedBrowser
+              ? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading)`
+              : "No supported browser detected. Install Chrome or Firefox and sign in to YouTube for best results."}
+          </p>
         </div>
 
         {/* Download Form */}

@@ -31,6 +31,17 @@ RETRY_BACKOFF_MULTIPLIER = 1.5
 INCOMPLETE_FILE_EXTENSIONS = ('.part', '.ytdl')
 VIDEO_EXTENSIONS = ['mp4', 'webm', 'mkv', 'm4a', 'flv', 'avi', 'mov']
 CACHE_KEY_VERSION = "hqv2"
+SUPPORTED_COOKIE_BROWSERS = {
+    'brave',
+    'chrome',
+    'chromium',
+    'edge',
+    'firefox',
+    'opera',
+    'safari',
+    'vivaldi',
+    'whale',
+}
 
 
 @dataclass
@@ -217,12 +228,24 @@ class YouTubeDownloader:
 
     @staticmethod
     def _build_format_selectors(quality: str) -> List[str]:
-        """Build format selectors with no silent progressive fallback."""
-        candidates = [
-            quality.strip() if quality else "",
+        """Build selectors that prioritize broadly compatible MP4 outputs."""
+        requested_quality = quality.strip() if quality else ""
+        # Generic HQ selectors often choose AV1/WebM and force slow post-transcode.
+        # Default to MP4-first selectors unless caller requested a specific constrained format.
+        if requested_quality in {
             "bestvideo*+bestaudio",
             "bv*+ba",
             "bestvideo+bestaudio",
+            "bestvideo+bestaudio/best",
+        }:
+            requested_quality = ""
+
+        candidates = [
+            requested_quality,
+            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]",
+            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[acodec!=none]",
+            "best[ext=mp4][vcodec!=none][acodec!=none]",
+            "best[ext=mp4]/best",
         ]
         selectors: List[str] = []
         for selector in candidates:
@@ -265,9 +288,82 @@ class YouTubeDownloader:
         return value.strip().lower() in ('1', 'true', 'yes', 'on')
 
     @staticmethod
-    def _browser_cookie_candidate() -> Optional[str]:
-        browser = os.environ.get('YT_DLP_COOKIES_BROWSER', 'chrome').strip().lower()
-        return browser or None
+    def _default_cookie_browser_candidates() -> List[str]:
+        if sys.platform == 'darwin':
+            return ['arc', 'chrome', 'safari', 'firefox', 'edge', 'brave', 'chromium', 'opera', 'vivaldi']
+        if sys.platform.startswith('win'):
+            return ['edge', 'chrome', 'firefox', 'brave', 'chromium', 'opera', 'vivaldi', 'whale']
+        return ['chrome', 'firefox', 'chromium', 'edge', 'brave', 'opera', 'vivaldi']
+
+    @classmethod
+    def _browser_cookie_candidates(cls, include_default_fallback: bool = True) -> List[str]:
+        raw = os.environ.get('YT_DLP_COOKIES_BROWSER', '').strip().lower()
+        if raw:
+            requested = [token.strip() for token in re.split(r'[, ]+', raw) if token.strip()]
+            candidates = requested + (cls._default_cookie_browser_candidates() if include_default_fallback else [])
+        else:
+            candidates = cls._default_cookie_browser_candidates()
+
+        seen = set()
+        unique: List[str] = []
+        for browser in candidates:
+            normalized = {
+                'google-chrome': 'chrome',
+                'msedge': 'edge',
+            }.get(browser, browser)
+            if normalized != 'arc' and normalized not in SUPPORTED_COOKIE_BROWSERS:
+                continue
+            browser = normalized
+            if browser not in seen:
+                seen.add(browser)
+                unique.append(browser)
+        return unique
+
+    @staticmethod
+    def _arc_cookie_profile_path() -> Optional[str]:
+        if sys.platform != 'darwin':
+            return None
+        user_data = Path.home() / 'Library' / 'Application Support' / 'Arc' / 'User Data'
+        if not user_data.exists():
+            return None
+
+        profile_dirs = [
+            p for p in user_data.iterdir()
+            if p.is_dir() and (p.name == 'Default' or p.name.startswith('Profile '))
+        ]
+        profile_dirs.sort(key=lambda p: (p / 'Cookies').stat().st_mtime if (p / 'Cookies').exists() else 0, reverse=True)
+        for profile_dir in profile_dirs:
+            if (profile_dir / 'Cookies').exists():
+                return str(profile_dir)
+        return None
+
+    def _cookiesfrombrowser_option(self, browser: str) -> Optional[Tuple[str, ...]]:
+        if browser == 'arc':
+            profile = self._arc_cookie_profile_path()
+            if profile:
+                return ('chrome', profile)
+            return None
+        if browser in SUPPORTED_COOKIE_BROWSERS:
+            return (browser,)
+        return None
+
+    @staticmethod
+    def _truncate_error_message(message: str, limit: int = 220) -> str:
+        cleaned = re.sub(r'\s+', ' ', str(message or '')).strip()
+        if len(cleaned) <= limit:
+            return cleaned
+        return f"{cleaned[:limit - 3]}..."
+
+    def _resolve_ffmpeg_location_for_ytdlp(self) -> Optional[str]:
+        """Resolve ffmpeg binary location for yt-dlp merge operations."""
+        for candidate in [os.environ.get('FFMPEG_PATH', '').strip(), 'ffmpeg']:
+            if not candidate:
+                continue
+            try:
+                return self._validate_ffmpeg_path(candidate)
+            except (ValueError, FileNotFoundError):
+                continue
+        return None
 
     @staticmethod
     def _extract_format_capabilities(url: str) -> dict:
@@ -454,30 +550,56 @@ class YouTubeDownloader:
         return None
     
     def extract_video_info(self, url: str) -> Optional[VideoInfo]:
-        """Extract video information without downloading"""
-        ydl_opts = {
+        """Extract video information without downloading. Uses --cookies-from-browser for first detected browser only."""
+        base_opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,
         }
-        
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
+        browser_cookies_enabled = self._is_truthy_env('YT_DLP_ENABLE_BROWSER_COOKIES', default=False)
+        cookie_browsers = self._browser_cookie_candidates() if browser_cookies_enabled else []
+
+        attempts: List[Tuple[str, dict]] = [('default', {})]
+        # Single browser attempt: first candidate that has a valid cookiesfrombrowser spec
+        for cookies_browser in cookie_browsers:
+            cookiesfrombrowser = self._cookiesfrombrowser_option(cookies_browser)
+            if cookiesfrombrowser:
+                attempts.append((f'cookie_{cookies_browser}', {'cookiesfrombrowser': cookiesfrombrowser}))
+                break
+        attempts.extend([
+            ('mweb', {'extractor_args': {'youtube': {'player_client': ['mweb']}}}),
+            ('android', {'extractor_args': {'youtube': {'player_client': ['android']}}}),
+        ])
+
+        attempt_errors: List[str] = []
+        for attempt_name, extra_opts in attempts:
+            ydl_opts = {**base_opts, **extra_opts}
+            self._emit_debug_event(
+                'auth_debug',
+                {
+                    'event': 'extract_attempt',
+                    'attempt': attempt_name,
+                    'cookiefile': bool(ydl_opts.get('cookiefile')),
+                    'cookiesfrombrowser': ydl_opts.get('cookiesfrombrowser'),
+                    'extractor_args': ydl_opts.get('extractor_args'),
+                },
+            )
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+
                 if not info:
-                    return None
-                
-                # Handle different video types
+                    continue
+
                 is_live = info.get('live_status') == 'is_live'
                 is_scheduled = info.get('live_status') == 'is_upcoming'
-                
+
                 scheduled_start_time = None
                 if is_scheduled and info.get('release_timestamp'):
                     scheduled_start_time = datetime.fromtimestamp(
                         info['release_timestamp']
                     ).isoformat()
-                
+
                 return VideoInfo(
                     id=info.get('id', ''),
                     title=info.get('title', ''),
@@ -490,19 +612,39 @@ class YouTubeDownloader:
                     view_count=info.get('view_count'),
                     upload_date=info.get('upload_date')
                 )
-                
-        except yt_dlp.utils.DownloadError as e:
-            print(f"Error extracting video info (DownloadError): {e}", file=sys.stderr)
-            return None
-        except yt_dlp.utils.ExtractorError as e:
-            print(f"Error extracting video info (ExtractorError): {e}", file=sys.stderr)
-            return None
-        except (ValueError, KeyError, TypeError) as e:
-            print(f"Error extracting video info (DataError): {e}", file=sys.stderr)
-            return None
-        except Exception as e:
-            print(f"Error extracting video info (Unexpected): {e}", file=sys.stderr)
-            return None
+            except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
+                truncated = self._truncate_error_message(str(e))
+                self._emit_debug_event(
+                    'auth_debug',
+                    {
+                        'event': 'extract_attempt_failed',
+                        'attempt': attempt_name,
+                        'error': truncated,
+                    },
+                )
+                attempt_errors.append(f"{attempt_name}: {truncated}")
+                continue
+            except (ValueError, KeyError, TypeError) as e:
+                print(f"Error extracting video info (DataError): {e}", file=sys.stderr)
+                return None
+            except Exception as e:
+                print(f"Error extracting video info (Unexpected): {e}", file=sys.stderr)
+                return None
+
+        if attempt_errors:
+            preview = "; ".join(attempt_errors[:4])
+            if len(attempt_errors) > 4:
+                preview = f"{preview}; ... (+{len(attempt_errors) - 4} more)"
+            self._emit_debug_event(
+                'auth_debug',
+                {
+                    'event': 'extract_all_attempts_failed',
+                    'attempt_error_count': len(attempt_errors),
+                    'error_preview': preview,
+                },
+            )
+            print(f"Error extracting video info (all attempts failed): {preview}", file=sys.stderr)
+        return None
     
     def _get_cached_video_path(self, video_id: str) -> Optional[str]:
         """Check if a cached video exists in temp directory for the given video ID"""
@@ -543,6 +685,100 @@ class YouTubeDownloader:
                     return str(candidate)
         
         return None
+
+    @staticmethod
+    def _requires_mp4_compatibility_transcode(
+        source_path: Path,
+        output_path: Path,
+        selected_format: Optional[dict]
+    ) -> bool:
+        """Decide whether final .mp4 should be transcoded for QuickTime compatibility."""
+        if output_path.suffix.lower() != '.mp4':
+            return False
+
+        source_ext = source_path.suffix.lower()
+        if source_ext not in ('.mp4', '.m4v', '.mov'):
+            return True
+
+        if not isinstance(selected_format, dict):
+            return False
+
+        video_codec = str(selected_format.get('vcodec') or '').strip().lower()
+        if video_codec and not (
+            video_codec.startswith('avc1')
+            or video_codec.startswith('h264')
+            or video_codec.startswith('hevc')
+            or video_codec.startswith('h265')
+        ):
+            return True
+
+        audio_codec = str(selected_format.get('acodec') or '').strip().lower()
+        if audio_codec and audio_codec not in ('none', 'aac', 'mp3', 'ac3', 'eac3', 'alac'):
+            return True
+
+        return False
+
+    def _transcode_to_quicktime_mp4(self, input_path: Path, output_path: Path) -> bool:
+        """Transcode video to H.264/AAC .mp4 for broad QuickTime compatibility."""
+        ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
+        if not ffmpeg_path:
+            print("FFmpeg validation error: FFmpeg not found in FFMPEG_PATH or PATH", file=sys.stderr)
+            return False
+
+        temp_output = output_path.with_name(f"{output_path.stem}.qtcompat{output_path.suffix}")
+        try:
+            if temp_output.exists():
+                temp_output.unlink()
+        except OSError:
+            pass
+
+        cmd = [
+            ffmpeg_path,
+            '-i', str(input_path),
+            '-map', '0:v:0',
+            '-map', '0:a?',
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-movflags', '+faststart',
+            str(temp_output),
+            '-y'
+        ]
+
+        try:
+            subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+                timeout=7200,
+            )
+
+            if not temp_output.exists() or temp_output.stat().st_size == 0:
+                print("QuickTime compatibility transcode produced no output", file=sys.stderr)
+                return False
+
+            temp_output.replace(output_path)
+            return True
+        except subprocess.TimeoutExpired:
+            print("QuickTime compatibility transcode timed out after 2 hours", file=sys.stderr)
+            return False
+        except subprocess.CalledProcessError as e:
+            error_output = e.stderr.decode('utf-8', errors='replace') if e.stderr else str(e)
+            print(f"QuickTime compatibility transcode error: {error_output}", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"QuickTime compatibility transcode failed: {e}", file=sys.stderr)
+            return False
+        finally:
+            if temp_output.exists():
+                try:
+                    temp_output.unlink()
+                except OSError:
+                    pass
     
     def cut_video(
         self,
@@ -566,11 +802,9 @@ class YouTubeDownloader:
             return False
         
         # Get and validate ffmpeg path
-        ffmpeg_path = os.environ.get('FFMPEG_PATH', 'ffmpeg')
-        try:
-            ffmpeg_path = self._validate_ffmpeg_path(ffmpeg_path)
-        except (ValueError, FileNotFoundError) as e:
-            print(f"FFmpeg validation error: {e}", file=sys.stderr)
+        ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
+        if not ffmpeg_path:
+            print("FFmpeg validation error: FFmpeg not found in FFMPEG_PATH or PATH", file=sys.stderr)
             return False
         
         cmd = [ffmpeg_path]
@@ -649,11 +883,9 @@ class YouTubeDownloader:
             return False
         
         # Get and validate ffmpeg path
-        ffmpeg_path = os.environ.get('FFMPEG_PATH', 'ffmpeg')
-        try:
-            ffmpeg_path = self._validate_ffmpeg_path(ffmpeg_path)
-        except (ValueError, FileNotFoundError) as e:
-            print(f"FFmpeg validation error: {e}", file=sys.stderr)
+        ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
+        if not ffmpeg_path:
+            print("FFmpeg validation error: FFmpeg not found in FFMPEG_PATH or PATH", file=sys.stderr)
             return False
         
         temp_dir = self._get_temp_dir()
@@ -803,6 +1035,9 @@ class YouTubeDownloader:
         progress_tracker = DownloadProgressTracker()
         format_caps = self._extract_format_capabilities(url)
         allow_low_quality = self._is_truthy_env('YT_DLP_ALLOW_LOW_QUALITY_FALLBACK', default=False)
+        browser_cookies_enabled = self._is_truthy_env('YT_DLP_ENABLE_BROWSER_COOKIES', default=False)
+        cookie_browsers = self._browser_cookie_candidates() if browser_cookies_enabled else []
+        ffmpeg_location_for_ytdlp = self._resolve_ffmpeg_location_for_ytdlp()
         self._emit_debug_event(
             'quality_debug',
             {
@@ -810,10 +1045,14 @@ class YouTubeDownloader:
                 'max_adaptive_height': format_caps.get('max_adaptive_height'),
                 'max_progressive_height': format_caps.get('max_progressive_height'),
                 'allow_low_quality_fallback': allow_low_quality,
+                'browser_cookies_enabled': browser_cookies_enabled,
+                'cookie_browsers': cookie_browsers,
+                'ffmpeg_location_for_ytdlp': ffmpeg_location_for_ytdlp,
             },
         )
         successful_profile_name: Optional[str] = None
         successful_selector: Optional[str] = None
+        profile_errors: dict[str, str] = {}
         
         # Check for cached video first (use original video_id for backward compatibility)
         cache_video_id = self._cache_key(video_info.id)
@@ -869,7 +1108,7 @@ class YouTubeDownloader:
             # The video_id is already validated from YouTube, so it should be safe
             download_output_path = str(temp_dir / f'{cache_video_id}.%(ext)s')
             
-            # Try highest quality first, then restricted-client progressive fallback.
+            # Try highest quality first, then single detected-browser cookies, then fallbacks.
             attempt_profiles = [
                 {
                     "name": "hq",
@@ -877,21 +1116,34 @@ class YouTubeDownloader:
                     "extra_opts": {},
                 },
             ]
+            if browser_cookies_enabled:
+                for cookies_browser in cookie_browsers:
+                    cookiesfrombrowser = self._cookiesfrombrowser_option(cookies_browser)
+                    if cookiesfrombrowser:
+                        attempt_profiles.append(
+                            {
+                                "name": f"hq_cookie_{cookies_browser}",
+                                "selectors": self._build_format_selectors(quality),
+                                "extra_opts": {"cookiesfrombrowser": cookiesfrombrowser},
+                            }
+                        )
+                        break
 
-            # Optional authenticated HQ retry using browser cookies.
-            # This is the most reliable way to unlock adaptive high-quality streams.
-            if self._is_truthy_env('YT_DLP_ENABLE_BROWSER_COOKIES', default=False):
-                browser = self._browser_cookie_candidate()
-                if browser:
-                    attempt_profiles.append(
-                        {
-                            "name": f"hq_cookie_{browser}",
-                            "selectors": self._build_format_selectors(quality),
-                            "extra_opts": {
-                                "cookiesfrombrowser": (browser,),
-                            },
+            # Some videos block default web client HQ streams but still allow adaptive
+            # formats via mweb client without dropping to low progressive quality.
+            attempt_profiles.append(
+                {
+                    "name": "hq_mweb",
+                    "selectors": self._build_format_selectors(quality),
+                    "extra_opts": {
+                        "extractor_args": {
+                            "youtube": {
+                                "player_client": ["mweb"],
+                            }
                         }
-                    )
+                    },
+                }
+            )
 
             attempt_profiles.append(
                 {
@@ -946,9 +1198,8 @@ class YouTubeDownloader:
                     }
 
                     # Let yt-dlp merge highest quality streams using bundled/system ffmpeg.
-                    ffmpeg_location = os.environ.get('FFMPEG_PATH')
-                    if ffmpeg_location:
-                        base_opts['ffmpeg_location'] = ffmpeg_location
+                    if ffmpeg_location_for_ytdlp:
+                        base_opts['ffmpeg_location'] = ffmpeg_location_for_ytdlp
 
                     if extra_opts:
                         base_opts.update(extra_opts)
@@ -983,11 +1234,24 @@ class YouTubeDownloader:
                     except yt_dlp.utils.DownloadError as e:
                         last_error = e
                         error_msg = str(e)
+                        profile_name = profile.get('name') or 'unknown_profile'
+                        profile_errors[profile_name] = self._truncate_error_message(error_msg)
+                        self._emit_debug_event(
+                            'quality_debug',
+                            {
+                                'event': 'attempt_failed',
+                                'profile': profile_name,
+                                'selector': format_selector,
+                                'error': profile_errors[profile_name],
+                            },
+                        )
                         error_msg_lower = error_msg.lower()
                         # If merge failed due missing ffmpeg, do not silently degrade quality
                         if 'ffmpeg' in error_msg_lower and (
                             'merge' in error_msg_lower
+                            or 'merging' in error_msg_lower
                             or 'merger' in error_msg_lower
+                            or 'multiple formats' in error_msg_lower
                             or 'postprocess' in error_msg_lower
                             or 'post-process' in error_msg_lower
                         ):
@@ -1004,6 +1268,17 @@ class YouTubeDownloader:
                         continue
                     except Exception as e:
                         last_error = e
+                        profile_name = profile.get('name') or 'unknown_profile'
+                        profile_errors[profile_name] = self._truncate_error_message(str(e))
+                        self._emit_debug_event(
+                            'quality_debug',
+                            {
+                                'event': 'attempt_failed',
+                                'profile': profile_name,
+                                'selector': format_selector,
+                                'error': profile_errors[profile_name],
+                            },
+                        )
                         continue
 
                 if download_succeeded:
@@ -1104,8 +1379,32 @@ class YouTubeDownloader:
                 error_message=(
                     f"High-quality stream is available up to {max_adaptive_height}p, "
                     f"but YouTube blocked adaptive download and only {selected_height}p progressive succeeded. "
-                    "Enable browser cookies (YT_DLP_ENABLE_BROWSER_COOKIES=true, YT_DLP_COOKIES_BROWSER=chrome) "
-                    "or set YT_DLP_ALLOW_LOW_QUALITY_FALLBACK=true to permit low-quality fallback."
+                    + (
+                        (
+                            "Browser cookies were enabled but did not unlock adaptive formats"
+                            + (
+                                (
+                                    " (cookie attempt errors: "
+                                    + "; ".join(
+                                        f"{browser}: {profile_errors.get(f'hq_cookie_{browser}', 'unknown')}"
+                                        for browser in cookie_browsers
+                                        if profile_errors.get(f'hq_cookie_{browser}')
+                                    )
+                                    + "). "
+                                )
+                                if any(profile_errors.get(f'hq_cookie_{browser}') for browser in cookie_browsers)
+                                else ". "
+                            )
+                            + "Try using a browser where you're signed in (cookies used automatically), "
+                            "or set YT_DLP_ALLOW_LOW_QUALITY_FALLBACK=true to permit low-quality fallback."
+                        )
+                        if browser_cookies_enabled
+                        else (
+                            "Enable browser cookies (YT_DLP_ENABLE_BROWSER_COOKIES=true, "
+                            "YT_DLP_COOKIES_BROWSER=arc,chrome,edge,firefox,safari) or set "
+                            "YT_DLP_ALLOW_LOW_QUALITY_FALLBACK=true to permit low-quality fallback."
+                        )
+                    )
                 ),
                 video_info=video_info
             )
@@ -1246,6 +1545,36 @@ class YouTubeDownloader:
                     error_message=f"Failed to copy file to requested location: {str(e)}",
                     video_info=video_info
                 )
+
+        final_path_obj = Path(final_file_path)
+        requires_mp4_compat = self._requires_mp4_compatibility_transcode(
+            original_file_path,
+            final_path_obj,
+            progress_tracker.selected_format
+        )
+        if requires_mp4_compat:
+            transcode_input = final_path_obj if needs_cut else original_file_path
+            self._emit_debug_event(
+                'quality_debug',
+                {
+                    'event': 'mp4_compat_transcode',
+                    'input_path': str(transcode_input),
+                    'output_path': str(final_path_obj),
+                    'source_ext': original_file_path.suffix.lower(),
+                    'selected_format': progress_tracker.selected_format,
+                },
+            )
+            if not self._transcode_to_quicktime_mp4(transcode_input, final_path_obj):
+                return DownloadResult(
+                    success=False,
+                    file_path=None,
+                    file_size=None,
+                    error_message=(
+                        "Downloaded video uses codecs that are not QuickTime-compatible and "
+                        "automatic MP4 compatibility conversion failed."
+                    ),
+                    video_info=video_info
+                )
         
         # Verify the cached file still exists in temp directory
         cached_file_path_str = None
@@ -1255,7 +1584,6 @@ class YouTubeDownloader:
                 cached_file_path_str = str(original_file_path)
         
         # Final validation
-        final_path_obj = Path(final_file_path)
         if not final_path_obj.exists() or not final_path_obj.is_file():
             return DownloadResult(
                 success=False,
@@ -1346,7 +1674,7 @@ def main():
         }))
         sys.stdout.flush()
         sys.exit(0)
-    
+
     # Check if this is a local file processing request
     if sys.argv[1] == "--local":
         if len(sys.argv) < 5:

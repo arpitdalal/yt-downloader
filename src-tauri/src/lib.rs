@@ -1,3 +1,4 @@
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
@@ -78,6 +79,16 @@ pub struct LogInfo {
     pub resources_path: String,
     pub app_path: String,
     pub is_packaged: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YouTubeAuthStatus {
+    /// True if a supported browser is configured for cookie access.
+    pub connected: bool,
+    /// First detected/supported browser name (e.g. "chrome").
+    pub detected_browser: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -234,6 +245,11 @@ fn get_log_info(app: AppHandle) -> Result<LogInfo, String> {
     })
 }
 
+#[tauri::command]
+fn get_youtube_auth_status(_app: AppHandle) -> Result<YouTubeAuthStatus, String> {
+    Ok(detected_browser_auth_status())
+}
+
 fn run_extract_video_info(app: AppHandle, url: String) -> Result<VideoInfo, String> {
     let validated_url = validate_youtube_url(&url).map_err(|e| format!("Invalid input: {e}"))?;
     let python_path = get_python_path(&app)?;
@@ -247,23 +263,32 @@ fn run_extract_video_info(app: AppHandle, url: String) -> Result<VideoInfo, Stri
     ];
 
     let python_dir = get_python_working_dir(&python_path);
+    let env_overrides = yt_dlp_env_overrides(&app, None);
+    info!("Extract video info started: url={}", validated_url);
     let child = spawn_python_process(
         "Failed to start download process",
         &python_path,
         &args,
         python_dir.as_deref(),
-        &[],
+        &env_overrides,
     )?;
     let output = run_untracked_process(child)?;
     if !output.status.success() {
-        return Err(format!(
-            "Python process failed: {}",
-            if output.stderr.trim().is_empty() {
-                format!("Process exited with code {}", output.status)
-            } else {
-                output.stderr.trim().to_string()
-            }
-        ));
+        let stderr = output.stderr.trim();
+        let message = if stderr.is_empty() {
+            format!("Process exited with code {}", output.status)
+        } else {
+            stderr.to_string()
+        };
+        warn!("Extract video info failed: {message}");
+        if is_youtube_auth_verification_error(&message) {
+            warn!(
+                "Extract video info auth error (YouTube bot check) for url={}",
+                validated_url
+            );
+            return Err(format!("YOUTUBE_AUTH: {message}"));
+        }
+        return Err(format!("Python process failed: {message}"));
     }
 
     let value = parse_json_payload(&output.stdout)
@@ -297,18 +322,25 @@ fn run_download_video(
 
     let sections_json = serde_json::to_string(&validated.sections)
         .map_err(|error| format!("Failed to serialize sections: {error}"))?;
+    let validated_url = validated.url.clone();
 
     let args = vec![
         script_path.to_string_lossy().to_string(),
-        validated.url,
+        validated_url.clone(),
         "false".to_string(),
-        "bestvideo*+bestaudio".to_string(),
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best".to_string(),
         sections_json,
         validated.save_path.to_string_lossy().to_string(),
     ];
 
     let python_dir = get_python_working_dir(&python_path);
-    let env_overrides = vec![("FFMPEG_PATH", ffmpeg_path.to_string_lossy().to_string())];
+    let env_overrides = download_env_overrides(&app, &ffmpeg_path);
+    info!(
+        "Download started: url={} save_path={} sections={}",
+        validated_url,
+        validated.save_path.to_string_lossy(),
+        validated.sections.len()
+    );
     let child = spawn_python_process(
         "Failed to start download process",
         &python_path,
@@ -329,10 +361,63 @@ fn run_download_video(
         } else {
             stderr.to_string()
         };
+        warn!("Download failed: {message}");
+        if is_youtube_auth_verification_error(&message) {
+            warn!("Download auth error (YouTube bot check).");
+            return Err(format!("YOUTUBE_AUTH: {message}"));
+        }
         return Err(format!("Download process failed: {message}"));
     }
 
     parse_download_result(&output.stdout, "Download failed")
+}
+
+fn default_cookie_browser_list() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "arc,chrome,safari,firefox,edge,brave,chromium,opera,vivaldi"
+    } else if cfg!(target_os = "windows") {
+        "edge,chrome,firefox,brave,chromium,opera,vivaldi,whale"
+    } else {
+        "chrome,firefox,chromium,edge,brave,opera,vivaldi"
+    }
+}
+
+fn yt_dlp_env_overrides(
+    _app: &AppHandle,
+    ffmpeg_path: Option<&Path>,
+) -> Vec<(&'static str, String)> {
+    let mut env_overrides = Vec::new();
+    if let Some(path) = ffmpeg_path {
+        env_overrides.push(("FFMPEG_PATH", path.to_string_lossy().to_string()));
+    }
+    let enable_browser_cookies =
+        env::var("YT_DLP_ENABLE_BROWSER_COOKIES").unwrap_or_else(|_| "true".to_string());
+    env_overrides.push(("YT_DLP_ENABLE_BROWSER_COOKIES", enable_browser_cookies));
+    let cookies_browser = env::var("YT_DLP_COOKIES_BROWSER")
+        .unwrap_or_else(|_| default_cookie_browser_list().to_string());
+    env_overrides.push(("YT_DLP_COOKIES_BROWSER", cookies_browser));
+    env_overrides
+}
+
+fn download_env_overrides(app: &AppHandle, ffmpeg_path: &Path) -> Vec<(&'static str, String)> {
+    yt_dlp_env_overrides(app, Some(ffmpeg_path))
+}
+
+/// Returns auth status based on configured browser list (first browser = detected).
+fn detected_browser_auth_status() -> YouTubeAuthStatus {
+    let list = default_cookie_browser_list();
+    let first = list.split(',').next().map(|s| s.trim().to_string());
+    YouTubeAuthStatus {
+        connected: first.is_some(),
+        detected_browser: first,
+    }
+}
+
+fn is_youtube_auth_verification_error(message: &str) -> bool {
+    let lowered = message.to_lowercase();
+    lowered.contains("sign in to confirm you’re not a bot")
+        || lowered.contains("sign in to confirm you're not a bot")
+        || lowered.contains("use --cookies-from-browser or --cookies for the authentication")
 }
 
 fn run_process_local_video(
@@ -472,9 +557,11 @@ fn run_tracked_process(
                 if let Some(progress) = parse_progress_line(&line) {
                     let _ = app_for_stderr.emit("download-progress", progress);
                 }
-                if is_quality_debug_line(&line) {
-                    eprintln!("{line}");
-                }
+            }
+            if is_quality_debug_line(&line) || is_auth_debug_line(&line) {
+                info!("{line}");
+            } else if line.starts_with("ERROR:") {
+                warn!("python stderr: {line}");
             }
         }
         output
@@ -555,6 +642,17 @@ fn is_quality_debug_line(line: &str) -> bool {
     matches!(
         value.get("type").and_then(|value| value.as_str()),
         Some("quality_debug")
+    )
+}
+
+fn is_auth_debug_line(line: &str) -> bool {
+    let value: Value = match serde_json::from_str(line.trim()) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    matches!(
+        value.get("type").and_then(|value| value.as_str()),
+        Some("auth_debug")
     )
 }
 
@@ -758,6 +856,7 @@ fn resolve_dev_python_path() -> Option<PathBuf> {
         }
     }
 
+    // Keep dev runtime aligned with packaged runtime when resources are present.
     let bundled_python = if cfg!(target_os = "windows") {
         project_root()
             .join("src-tauri")
@@ -794,7 +893,9 @@ fn resolve_dev_python_path() -> Option<PathBuf> {
 fn resolve_dev_ffmpeg_path() -> Option<PathBuf> {
     if let Some(path) = env::var_os("FFMPEG_PATH") {
         let path = PathBuf::from(path);
-        if path.exists() || (path.components().count() == 1 && command_available(&path.to_string_lossy())) {
+        if path.exists()
+            || (path.components().count() == 1 && command_available(&path.to_string_lossy()))
+        {
             return Some(path);
         }
     }
@@ -1062,7 +1163,8 @@ pub fn run() {
             download_video,
             process_local_video,
             cancel_download,
-            get_log_info
+            get_log_info,
+            get_youtube_auth_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1238,6 +1340,32 @@ mod tests {
         assert_eq!(parsed.percent, Some(25.0));
         assert_eq!(parsed.downloaded_bytes, Some(25));
         assert_eq!(parsed.total_bytes, Some(100));
+    }
+
+    #[test]
+    fn recognizes_auth_debug_lines() {
+        assert!(is_auth_debug_line(
+            r#"{"type":"auth_debug","event":"extract_attempt"}"#
+        ));
+        assert!(!is_auth_debug_line(r#"{"type":"quality_debug","event":"x"}"#));
+    }
+
+    #[test]
+    fn recognizes_youtube_auth_verification_errors() {
+        assert!(is_youtube_auth_verification_error(
+            "Sign in to confirm you're not a bot"
+        ));
+        assert!(is_youtube_auth_verification_error(
+            "Use --cookies-from-browser or --cookies for the authentication"
+        ));
+        assert!(!is_youtube_auth_verification_error("network timeout"));
+    }
+
+    #[test]
+    fn detected_browser_auth_status_returns_first_browser() {
+        let status = detected_browser_auth_status();
+        assert!(status.connected);
+        assert!(status.detected_browser.is_some());
     }
 
     #[test]

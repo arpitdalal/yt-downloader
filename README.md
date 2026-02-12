@@ -66,6 +66,15 @@ pnpm tauri:build:win
 pnpm tauri:build:linux
 ```
 
+## YouTube Auth / Quality
+
+- App uses yt-dlp’s `--cookies-from-browser` at extract/download time (no cookie file sync).
+- UI shows passive “Browser detected: &lt;browser&gt;” when a supported browser (e.g. Chrome, Firefox) is found; cookies from that browser are used automatically for downloads.
+- Sign in to YouTube in your browser if a video requires it; the app will use those cookies on the next download.
+- Optional env overrides:
+  - `YT_DLP_ENABLE_BROWSER_COOKIES=false` — disable browser cookie attempts
+  - `YT_DLP_COOKIES_BROWSER=arc,chrome,edge,firefox,safari` — control browser order
+
 ## Scripts
 
 - `pnpm dev` / `pnpm dev:renderer`: run Vite only
