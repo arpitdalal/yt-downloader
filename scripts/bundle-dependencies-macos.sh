@@ -43,18 +43,16 @@ cp python/downloader.py "$PYTHON_DIR/downloader.py"
 echo "OK: Python bundled at $PYTHON_DIR"
 
 printf '\n=== Step 2: FFmpeg ===\n'
-if ! command -v ffmpeg >/dev/null 2>&1; then
-  if command -v brew >/dev/null 2>&1; then
-    brew install ffmpeg
-  else
-    echo "FFmpeg not found and Homebrew unavailable."
-    exit 1
-  fi
-fi
+FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1770834055_N-122712-g7e3781e3ca/ffmpeg.zip"
+FFMPEG_SHA256="7c2062101bff5bceb804f8be56e3b697f9f044fb4498e5c6005ece4a6ead8b7e"
 
-cp "$(which ffmpeg)" "$FFMPEG_DIR/ffmpeg"
+curl -fSL -o ffmpeg.zip "$FFMPEG_URL"
+echo "$FFMPEG_SHA256  ffmpeg.zip" | shasum -a 256 -c -
+unzip -o ffmpeg.zip -d "$FFMPEG_DIR"
 chmod +x "$FFMPEG_DIR/ffmpeg"
+rm -f ffmpeg.zip
 
+"$FFMPEG_DIR/ffmpeg" -version >/dev/null 2>&1 || { echo "ERROR: bundled ffmpeg binary does not execute"; exit 1; }
 echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
 printf '\n=== Summary ===\n'
