@@ -236,7 +236,7 @@ class YouTubeDownloader:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
         except (OSError, PermissionError) as e:
-            raise ValueError(f"Cannot create output directory: {e}")
+            raise ValueError(f"Cannot create output directory: {e}") from e
 
     @staticmethod
     def _build_format_selectors(quality: str) -> list[str]:
@@ -446,7 +446,7 @@ class YouTubeDownloader:
         try:
             print(json.dumps({"type": event_type, **payload}), file=sys.stderr, flush=True)
         except Exception:
-            pass
+            pass  # Intentionally silenced: debug telemetry must never break the main flow
 
     def _resolve_ffprobe_path(self) -> str | None:
         ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
