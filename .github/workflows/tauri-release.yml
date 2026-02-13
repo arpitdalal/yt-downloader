@@ -133,3 +133,26 @@ jobs:
             src-tauri/target/**/bundle/deb/*.deb
             src-tauri/target/**/bundle/rpm/*.rpm
           retention-days: 30
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release-macos, release-windows, release-linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create GitHub release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release-artifacts/**/*.dmg
+            release-artifacts/**/*.exe
+            release-artifacts/**/*.AppImage
+            release-artifacts/**/*.deb
+            release-artifacts/**/*.rpm
