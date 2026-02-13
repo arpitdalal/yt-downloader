@@ -3,6 +3,8 @@
 
 Run explicitly:
   RUN_REAL_WORLD_TESTS=1 python3 -m pytest python/test_downloader_real_world.py -s
+
+Uses same quality string and sections format as the Tauri app (lib.rs).
 """
 
 import json
@@ -20,43 +22,92 @@ RUN_REAL_WORLD_TESTS = os.environ.get("RUN_REAL_WORLD_TESTS", "").strip().lower(
     "yes",
 }
 
+# Quality string must match app: src-tauri/src/lib.rs run_download_video
+APP_QUALITY_STRING = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+
+# Sections for full-download (no cut): matches app default when user doesn't set sections
+FULL_DOWNLOAD_SECTIONS_JSON = json.dumps([{"start": None, "end": None}])
+
+# Mix of existing + ultra-stable URLs (Rick Astley, YouTube Rewind 2018)
+REAL_WORLD_URLS = [
+    "https://youtu.be/wrOjTfsI6kk?si=EPaZbVkudSFd5h0S",
+    "https://youtu.be/9quXafs-BmA?si=hDoahsI-YnMYZ6fB",
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://www.youtube.com/watch?v=YbJOTdZBX1g",
+]
+
 pytestmark = pytest.mark.skipif(
     not RUN_REAL_WORLD_TESTS,
     reason="Set RUN_REAL_WORLD_TESTS=1 to run live network integration tests",
 )
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://youtu.be/wrOjTfsI6kk?si=EPaZbVkudSFd5h0S",
-        "https://youtu.be/9quXafs-BmA?si=hDoahsI-YnMYZ6fB",
-    ],
-)
+def _run_ffmpeg_integrity_check(file_path: Path, ffmpeg_path: str) -> None:
+    """Decode first 5s of file; proves playable and FFmpeg works. Raises on failure."""
+    result = subprocess.run(
+        [ffmpeg_path, "-v", "error", "-i", str(file_path), "-t", "5", "-f", "null", "-"],
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"FFmpeg integrity check failed: {result.stderr.decode('utf-8', errors='replace')}"
+    )
+
+
+@pytest.mark.parametrize("url", REAL_WORLD_URLS)
+def test_extract_video_info_cli(url: str) -> None:
+    """App always calls --validate before download; catch info-extraction breakage."""
+    script_path = Path(__file__).with_name("downloader.py")
+    command = [sys.executable, str(script_path), "--validate", url]
+
+    process = subprocess.run(
+        command,
+        env={**os.environ, "YT_DLP_ENABLE_BROWSER_COOKIES": "false"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=120,
+    )
+
+    assert process.returncode == 0, process.stderr[-4000:]
+    payload = None
+    for index in [i for i, ch in enumerate(process.stdout) if ch == "{"][::-1]:
+        try:
+            payload = json.loads(process.stdout[index:])
+            break
+        except json.JSONDecodeError:
+            continue
+    assert payload is not None, process.stdout[-4000:]
+    assert payload.get("success") is True, payload
+    info = payload.get("video_info")
+    assert info, payload
+    assert info.get("title"), "video_info.title must be non-empty"
+    duration = info.get("duration")
+    assert duration is None or (isinstance(duration, (int, float)) and duration > 0), (
+        "duration should be missing or positive"
+    )
+
+
+@pytest.mark.parametrize("url", REAL_WORLD_URLS)
 def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
+    """Full download with app-matching quality and sections; no low-quality fallback."""
     script_path = Path(__file__).with_name("downloader.py")
     output_path = tmp_path / "real_world_output.mp4"
-    sections_json = json.dumps([{"start": 0, "end": None}])
 
     command = [
         sys.executable,
         str(script_path),
         url,
         "false",
-        "bestvideo*+bestaudio",
-        sections_json,
+        APP_QUALITY_STRING,
+        FULL_DOWNLOAD_SECTIONS_JSON,
         str(output_path),
     ]
 
+    env = {**os.environ, "YT_DLP_ENABLE_BROWSER_COOKIES": "false"}
     process = subprocess.run(
         command,
-        env={
-            **os.environ,
-            # Real-world test should prove CLI path still works end-to-end.
-            # Strict mode is validated in unit tests; integration run allows fallback.
-            "YT_DLP_ALLOW_LOW_QUALITY_FALLBACK": "true",
-            "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
-        },
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -74,5 +125,10 @@ def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
             continue
     assert payload is not None, process.stdout[-4000:]
     assert payload.get("success") is True, payload
-    assert Path(payload["file_path"]).exists()
-    assert Path(payload["file_path"]).stat().st_size > 1_000_000
+    out_file = Path(payload["file_path"])
+    assert out_file.exists()
+    assert out_file.stat().st_size > 5_000_000, "expected >5MB for a real download"
+
+    ffmpeg_path = env.get("FFMPEG_PATH")
+    if ffmpeg_path and Path(ffmpeg_path).exists():
+        _run_ffmpeg_integrity_check(out_file, ffmpeg_path)
