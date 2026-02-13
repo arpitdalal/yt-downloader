@@ -1,6 +1,6 @@
 {
 	"files": {
-		"includes": ["app/**", "vite.config.ts", "scripts/prebuild.js", "*.json"]
+		"includes": ["app/**", "vite.config.ts", "scripts/prebuild.js", "**/*.json"]
 	},
 	"formatter": {
 		"indentStyle": "tab"
