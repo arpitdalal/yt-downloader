@@ -4,17 +4,18 @@ import { platform } from "os";
 import { join } from "path";
 
 const isWindows = platform() === "win32";
+const resourcesRoot = "src-tauri/resources";
 
 const resourcesDirs = [
   {
-    path: "resources/python",
+    path: join(resourcesRoot, "python"),
     name: "Python",
     required: isWindows
       ? ["python.exe", "downloader.py"]
       : ["bin/python3", "downloader.py"], // macOS/Linux: python3 is in bin/
   },
   {
-    path: "resources/ffmpeg",
+    path: join(resourcesRoot, "ffmpeg"),
     name: "FFmpeg",
     required: isWindows ? ["ffmpeg.exe"] : ["ffmpeg"],
   },
@@ -57,7 +58,10 @@ async function ensureResourcesDirs() {
         }
         // If directory is empty, that's expected before bundling - no warning needed
       } catch (error) {
-        // Directory might be empty, that's okay for now
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `Warning: Could not read ${dir.name} directory (${dir.path}): ${message}`
+        );
       }
     }
   }

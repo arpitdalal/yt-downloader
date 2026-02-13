@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import {
-  electronAPI,
+  tauriAPI,
   type VideoInfo,
   type DownloadProgressData,
-} from "./lib/electron-api.js";
+  type YouTubeAuthStatus,
+} from "./lib/tauri-api.js";
 
 type DownloadStatus =
   | "idle"
@@ -23,23 +24,62 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus>({
+    connected: false,
+    detectedBrowser: null,
+  });
 
   // Set up progress listener
   useEffect(() => {
-    if (!window.electronAPI) {
-      return;
-    }
-
-    window.electronAPI.onDownloadProgress((data: DownloadProgressData) => {
+    tauriAPI.onDownloadProgress((data: DownloadProgressData) => {
       if (status === "downloading") {
-        setProgress(data.percent || 0);
+        setProgress((previous) => {
+          if (typeof data.percent === "number" && Number.isFinite(data.percent)) {
+            return Math.min(99.5, Math.max(previous, data.percent));
+          }
+
+          if (
+            typeof data.downloadedBytes === "number" &&
+            typeof data.totalBytes === "number" &&
+            data.totalBytes > 0
+          ) {
+            const derived = (data.downloadedBytes / data.totalBytes) * 100;
+            return Math.min(99.5, Math.max(previous, derived));
+          }
+
+          if (typeof data.downloadedBytes === "number" && data.downloadedBytes > 0) {
+            return Math.min(95, previous + 0.8);
+          }
+
+          return previous;
+        });
       }
     });
 
     return () => {
-      window.electronAPI.removeDownloadProgressListener();
+      tauriAPI.removeDownloadProgressListener();
     };
   }, [status]);
+
+  const refreshYouTubeAuthStatus = async () => {
+    try {
+      const authStatus = await tauriAPI.getYouTubeAuthStatus();
+      setYoutubeAuth(authStatus);
+    } catch (err) {
+      console.error("Failed to fetch YouTube auth status:", err);
+    }
+  };
+
+  useEffect(() => {
+    void refreshYouTubeAuthStatus();
+  }, []);
+
+  const isYouTubeAuthError = (message: string): boolean => {
+    return (
+      /sign in to confirm you[’']re not a bot/i.test(message) ||
+      message.includes("YOUTUBE_AUTH")
+    );
+  };
 
   const getErrorMessage = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
@@ -72,6 +112,13 @@ export default function App() {
     ) {
       return "The requested video quality is not available. Please try again.";
     }
+    const requiresYouTubeSignIn = isYouTubeAuthError(message);
+    if (requiresYouTubeSignIn) {
+      return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
+    }
+    if (message.includes("High-quality stream is available up to")) {
+      return message;
+    }
     if (message.includes("disk space") || message.includes("No space")) {
       return "Not enough disk space. Please free up space and try again.";
     }
@@ -79,7 +126,10 @@ export default function App() {
       return "Unable to get video information. Please check the URL and try again.";
     }
     if (message.includes("Download process failed")) {
-      return "Download failed. The video may be unavailable or there was a network error. Please try again.";
+      const details = message.replace("Download process failed:", "").trim();
+      return details
+        ? `Download failed: ${details}`
+        : "Download failed. The video may be unavailable or there was a network error. Please try again.";
     }
     if (message.includes("Invalid YouTube URL")) {
       return "Please enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...).";
@@ -202,9 +252,8 @@ export default function App() {
   };
 
   const handleChooseFile = async () => {
-    if (!window.electronAPI) return;
     try {
-      const result = await window.electronAPI.showOpenDialog({
+      const result = await tauriAPI.showOpenDialog({
         filters: [
           {
             name: "Video Files",
@@ -219,7 +268,6 @@ export default function App() {
       }
     } catch (err) {
       console.error("Failed to choose file:", err);
-      const message = err instanceof Error ? err.message : String(err);
       setError(
         err instanceof Error ? err.message : "Failed to open file picker"
       );
@@ -233,14 +281,6 @@ export default function App() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim() && !localFile) return;
-
-    if (!window.electronAPI) {
-      setError(
-        "Electron API is not available. Please ensure the app is running in Electron."
-      );
-      setStatus("error");
-      return;
-    }
 
     // Validate sections
     const validationError = validateSections();
@@ -265,7 +305,7 @@ export default function App() {
         const originalFilename = localFile.split(/[/\\]/).pop() || "video.mp4";
         const defaultFilename = `processed_${originalFilename}`;
 
-        const dialogResult = await window.electronAPI.showSaveDialog({
+        const dialogResult = await tauriAPI.showSaveDialog({
           defaultFilename,
         });
 
@@ -279,14 +319,13 @@ export default function App() {
           setStatus("error");
           return;
         }
-
         // Convert sections to format expected by backend
         const sectionsArray = sections.map((s) => ({
           start: s.start.trim() ? parseInt(s.start.trim(), 10) : null,
           end: s.end.trim() ? parseInt(s.end.trim(), 10) : null,
         }));
 
-        const result = await window.electronAPI.processLocalVideo({
+        const result = await tauriAPI.processLocalVideo({
           inputPath: localFile,
           savePath: dialogResult.filePath,
           sections: sectionsArray,
@@ -298,9 +337,8 @@ export default function App() {
         );
       } else {
         // Handle YouTube download
-        // Step 1: Extract video info
         setStatus("extracting");
-        const info = await window.electronAPI.extractVideoInfo(url.trim());
+        const info = await tauriAPI.extractVideoInfo(url.trim());
 
         if (!info) {
           throw new Error("Failed to extract video information");
@@ -312,7 +350,7 @@ export default function App() {
         const sanitizedTitle = sanitizeFilename(info.title || "video");
         const defaultFilename = `${sanitizedTitle}.mp4`;
 
-        const dialogResult = await window.electronAPI.showSaveDialog({
+        const dialogResult = await tauriAPI.showSaveDialog({
           defaultFilename,
         });
 
@@ -326,6 +364,7 @@ export default function App() {
           setStatus("error");
           return;
         }
+        const savePath = dialogResult.filePath;
 
         // Step 3: Start download
         setStatus("downloading");
@@ -337,9 +376,9 @@ export default function App() {
           end: s.end.trim() ? parseInt(s.end.trim(), 10) : null,
         }));
 
-        const result = await window.electronAPI.downloadVideo({
+        const result = await tauriAPI.downloadVideo({
           url: url.trim(),
-          savePath: dialogResult.filePath,
+          savePath,
           sections: sectionsArray,
         });
 
@@ -364,17 +403,17 @@ export default function App() {
       ) {
         return;
       }
+      if (isYouTubeAuthError(errorMessage)) {
+        void refreshYouTubeAuthStatus();
+      }
       setStatus("error");
       setError(getErrorMessage(err));
     }
   };
 
   const handleCancel = async () => {
-    if (!window.electronAPI) {
-      return;
-    }
     try {
-      await window.electronAPI.cancelDownload();
+      await tauriAPI.cancelDownload();
       setStatus("idle");
       setProgress(0);
       setError(null);
@@ -400,6 +439,17 @@ export default function App() {
               Download and cut YouTube videos with custom start and end times
             </p>
           </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-sm p-4 sm:p-6 mb-4 border border-gray-200">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-1">
+            YouTube
+          </h2>
+          <p className="text-sm text-gray-600">
+            {youtubeAuth.connected && youtubeAuth.detectedBrowser
+              ? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading)`
+              : "No supported browser detected. Install Chrome or Firefox and sign in to YouTube for best results."}
+          </p>
         </div>
 
         {/* Download Form */}

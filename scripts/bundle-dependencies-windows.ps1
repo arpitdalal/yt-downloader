@@ -1,64 +1,114 @@
-# Script to bundle Python and FFmpeg for Windows builds
-# Run this before building the Electron app
+# Bundle Python + FFmpeg for Tauri (Windows)
 
-Write-Host "Bundling dependencies for Windows..." -ForegroundColor Green
+$ErrorActionPreference = "Stop"
 
-# Create resources directory structure
-$resourcesDir = "resources"
-$pythonDir = Join-Path $resourcesDir "python"
-$ffmpegDir = Join-Path $resourcesDir "ffmpeg"
+Write-Host "Bundling dependencies for Windows (Tauri resources)..." -ForegroundColor Green
+
+$resourcesRoot = "src-tauri/resources"
+$pythonDir = Join-Path $resourcesRoot "python"
+$ffmpegDir = Join-Path $resourcesRoot "ffmpeg"
+
+function Assert-Sha256 {
+    param (
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedHash,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $actualHash = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $expected = $ExpectedHash.ToLowerInvariant()
+    if ($actualHash -ne $expected) {
+        if (Test-Path $Path) { Remove-Item -Force $Path }
+        throw "$Label checksum mismatch. Expected $expected but got $actualHash."
+    }
+}
+
+if (Test-Path $pythonDir) { Remove-Item -Recurse -Force $pythonDir }
+if (Test-Path $ffmpegDir) { Remove-Item -Recurse -Force $ffmpegDir }
 
 New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
 
 Write-Host "`n=== Step 1: Python ===" -ForegroundColor Yellow
-Write-Host "You need to download and extract Python embeddable package:"
-Write-Host "1. Download Python embeddable from: https://www.python.org/downloads/windows/"
-Write-Host "   - Choose: Windows embeddable package (64-bit) or (32-bit)"
-Write-Host "   - Extract to: $pythonDir"
-Write-Host "2. Install pip:"
-Write-Host "   - Download get-pip.py: https://bootstrap.pypa.io/get-pip.py"
-Write-Host "   - Run: python.exe get-pip.py"
-Write-Host "3. Install yt-dlp:"
-Write-Host "   - Run: python.exe -m pip install yt-dlp"
-Write-Host "4. Copy downloader.py:"
-Write-Host "   - Copy python/downloader.py to $pythonDir/downloader.py"
 
-$pythonExe = Join-Path $pythonDir "python.exe"
-if (Test-Path $pythonExe) {
-    Write-Host "✓ Python found at: $pythonExe" -ForegroundColor Green
-} else {
-    Write-Host "✗ Python not found. Please follow instructions above." -ForegroundColor Red
+$pythonVersion = "3.12.0"
+$pythonArch = "amd64"
+$pythonZipUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-$pythonArch.zip"
+$getPipUrl = "https://raw.githubusercontent.com/pypa/get-pip/69fd2a8ffdc323a975d2f15eb4c2766cf28daaf7/public/get-pip.py"
+$expectedPythonZipHash = "c87f000e3dae1a572e98e81daeb622f8bc6f22664093fc9c70989b5f0018d49b"
+$expectedGetPipHash = "feba1c697df45be1b539b40d93c102c9ee9dde1d966303323b830b06f3fbca3c"
+
+Write-Host "Downloading Python embeddable package..."
+try {
+    Invoke-WebRequest -Uri $pythonZipUrl -OutFile python-embed.zip
+    Assert-Sha256 -Path "python-embed.zip" -ExpectedHash $expectedPythonZipHash -Label "python-embed.zip"
+    Expand-Archive -Path python-embed.zip -DestinationPath $pythonDir -Force
+    Remove-Item python-embed.zip
+} catch {
+    if (Test-Path "python-embed.zip") { Remove-Item -Force "python-embed.zip" }
+    throw
 }
+
+$pthFile = Get-ChildItem $pythonDir -Filter "python*._pth" | Select-Object -First 1
+if ($null -ne $pthFile) {
+    $content = Get-Content $pthFile.FullName
+    $content = $content | ForEach-Object { $_ -replace '^#import site$', 'import site' }
+    Set-Content -Path $pthFile.FullName -Value $content
+}
+
+Write-Host "Installing pip + requirements..."
+try {
+    Invoke-WebRequest -Uri $getPipUrl -OutFile get-pip.py
+    Assert-Sha256 -Path "get-pip.py" -ExpectedHash $expectedGetPipHash -Label "get-pip.py"
+    & (Join-Path $pythonDir "python.exe") get-pip.py
+    Remove-Item get-pip.py
+} catch {
+    if (Test-Path "get-pip.py") { Remove-Item -Force "get-pip.py" }
+    throw
+}
+
+& (Join-Path $pythonDir "python.exe") -m pip install --upgrade pip
+& (Join-Path $pythonDir "python.exe") -m pip install -r python/requirements.txt
+
+Copy-Item "python/downloader.py" (Join-Path $pythonDir "downloader.py") -Force
+Write-Host "OK: Python bundled at $pythonDir" -ForegroundColor Green
 
 Write-Host "`n=== Step 2: FFmpeg ===" -ForegroundColor Yellow
-Write-Host "You need to download FFmpeg:"
-Write-Host "1. Download from: https://www.gyan.dev/ffmpeg/builds/"
-Write-Host "   - Choose: ffmpeg-release-essentials.zip"
-Write-Host "2. Extract and copy ffmpeg.exe to: $ffmpegDir/ffmpeg.exe"
 
-$ffmpegExe = Join-Path $ffmpegDir "ffmpeg.exe"
-if (Test-Path $ffmpegExe) {
-    Write-Host "✓ FFmpeg found at: $ffmpegExe" -ForegroundColor Green
-} else {
-    Write-Host "✗ FFmpeg not found. Please follow instructions above." -ForegroundColor Red
+$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1.1-essentials_build.zip"
+$expectedFfmpegZipHash = "04861d3339c5ebe38b56c19a15cf2c0cc97f5de4fa8910e4d47e5e6404e4a2d4"
+Write-Host "Downloading FFmpeg..."
+try {
+    Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
+    Assert-Sha256 -Path "ffmpeg.zip" -ExpectedHash $expectedFfmpegZipHash -Label "ffmpeg.zip"
+    Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp -Force
+
+    $ffmpegSource = Get-ChildItem ffmpeg-temp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+    if ($null -eq $ffmpegSource) {
+        throw "Failed to locate ffmpeg.exe in archive"
+    }
+    Copy-Item $ffmpegSource.FullName (Join-Path $ffmpegDir "ffmpeg.exe") -Force
+    Remove-Item -Recurse -Force ffmpeg-temp
+    Remove-Item ffmpeg.zip
+} catch {
+    if (Test-Path "ffmpeg-temp") { Remove-Item -Recurse -Force "ffmpeg-temp" }
+    if (Test-Path "ffmpeg.zip") { Remove-Item -Force "ffmpeg.zip" }
+    throw
 }
 
-Write-Host "`n=== Step 3: Copy Python Script ===" -ForegroundColor Yellow
-$downloaderScript = "python/downloader.py"
-$targetScript = Join-Path $pythonDir "downloader.py"
-if (Test-Path $downloaderScript) {
-    Copy-Item $downloaderScript $targetScript -Force
-    Write-Host "✓ Copied downloader.py" -ForegroundColor Green
-} else {
-    Write-Host "✗ downloader.py not found at: $downloaderScript" -ForegroundColor Red
-}
+Write-Host "OK: FFmpeg bundled at $ffmpegDir" -ForegroundColor Green
 
 Write-Host "`n=== Summary ===" -ForegroundColor Yellow
-if ((Test-Path $pythonExe) -and (Test-Path $ffmpegExe) -and (Test-Path $targetScript)) {
-    Write-Host "✓ All dependencies ready for bundling!" -ForegroundColor Green
-    Write-Host "You can now run: pnpm electron:build:win" -ForegroundColor Cyan
-} else {
-    Write-Host "✗ Some dependencies are missing. Please complete the steps above." -ForegroundColor Red
-}
+$pythonExe = Join-Path $pythonDir "python.exe"
+$pythonScript = Join-Path $pythonDir "downloader.py"
+$ffmpegExe = Join-Path $ffmpegDir "ffmpeg.exe"
 
+if ((Test-Path $pythonExe) -and (Test-Path $pythonScript) -and (Test-Path $ffmpegExe)) {
+    Write-Host "All dependencies bundled for Tauri." -ForegroundColor Green
+    Write-Host "Python: $pythonExe"
+    Write-Host "Script: $pythonScript"
+    Write-Host "FFmpeg: $ffmpegExe"
+    Write-Host "Next: pnpm tauri:build:win"
+} else {
+    throw "Dependency bundling failed"
+}
