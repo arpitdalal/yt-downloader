@@ -76,9 +76,9 @@ isProject: false
 
 **Key design choice: lean workflow.** We do NOT need Node.js, pnpm, Rust, Cargo, or Tauri build. We only need the bundled Python (with yt-dlp) + bundled FFmpeg from the bundle-dependencies scripts.
 
-```
-trigger:  schedule cron '0 6 * * *'  +  workflow_dispatch
-matrix:   macos-14, windows-2022, ubuntu-22.04
+```yaml
+trigger: schedule cron '0 6 * * *'  +  workflow_dispatch
+matrix: macos-14, windows-2022, ubuntu-22.04
 ```
 
 ### Steps per platform:
@@ -93,7 +93,7 @@ matrix:   macos-14, windows-2022, ubuntu-22.04
 
 - **macOS/Linux:**
 - **Windows (pwsh):**
-  ```
+  ```powershell
   $env:FFMPEG_PATH = "src-tauri\resources\ffmpeg\ffmpeg.exe"
   $env:RUN_REAL_WORLD_TESTS = "1"
   $env:YT_DLP_ENABLE_BROWSER_COOKIES = "false"
