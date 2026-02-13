@@ -42,6 +42,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _parse_last_json_object(text: str) -> dict | None:
+    """Return the last valid JSON object found in *text*, or None."""
+    for index in [i for i, ch in enumerate(text) if ch == "{"][::-1]:
+        try:
+            return json.loads(text[index:])
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def _run_ffmpeg_integrity_check(file_path: Path, ffmpeg_path: str) -> None:
     """Decode first 5s of file; proves playable and FFmpeg works. Raises on failure."""
     result = subprocess.run(
@@ -70,13 +80,7 @@ def test_extract_video_info_cli(url: str) -> None:
     )
 
     assert process.returncode == 0, process.stderr[-4000:]
-    payload = None
-    for index in [i for i, ch in enumerate(process.stdout) if ch == "{"][::-1]:
-        try:
-            payload = json.loads(process.stdout[index:])
-            break
-        except json.JSONDecodeError:
-            continue
+    payload = _parse_last_json_object(process.stdout)
     assert payload is not None, process.stdout[-4000:]
     assert payload.get("success") is True, payload
     info = payload.get("video_info")
@@ -115,20 +119,15 @@ def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
     )
 
     assert process.returncode == 0, process.stderr[-4000:]
-    payload = None
-    stdout = process.stdout.strip()
-    for index in [i for i, ch in enumerate(stdout) if ch == "{"][::-1]:
-        try:
-            payload = json.loads(stdout[index:])
-            break
-        except json.JSONDecodeError:
-            continue
+    payload = _parse_last_json_object(process.stdout.strip())
     assert payload is not None, process.stdout[-4000:]
     assert payload.get("success") is True, payload
-    out_file = Path(payload["file_path"])
-    assert out_file.exists()
+    file_path = payload.get("file_path")
+    assert file_path, f"payload missing 'file_path': {payload}"
+    out_file = Path(file_path)
+    assert out_file.exists(), f"output file not found: {out_file}"
     assert out_file.stat().st_size > 5_000_000, "expected >5MB for a real download"
 
-    ffmpeg_path = env.get("FFMPEG_PATH")
+    ffmpeg_path = os.environ.get("FFMPEG_PATH")
     if ffmpeg_path and Path(ffmpeg_path).exists():
         _run_ffmpeg_integrity_check(out_file, ffmpeg_path)
