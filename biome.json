@@ -1,13 +1,6 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.3.0/schema.json",
 	"files": {
-		"includes": [
-			"app/**",
-			"vite.config.ts",
-			"scripts/prebuild.js",
-			"package.json",
-			"tsconfig.json"
-		]
+		"includes": ["app/**", "vite.config.ts", "scripts/prebuild.js", "*.json"]
 	},
 	"formatter": {
 		"indentStyle": "tab"
