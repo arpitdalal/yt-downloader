@@ -1,0 +1,18 @@
+{
+	"files": {
+		"includes": ["app/**", "vite.config.ts", "scripts/prebuild.js", "**/*.json"]
+	},
+	"formatter": {
+		"indentStyle": "tab"
+	},
+	"linter": {
+		"rules": {
+			"recommended": true
+		}
+	},
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	}
+}

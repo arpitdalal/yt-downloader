@@ -1,0 +1,33 @@
+glob_matcher: doublestar
+
+pre-commit:
+  commands:
+    biome:
+      glob: "**/*.{ts,tsx,js,jsx,json}"
+      run: pnpm biome check --write {staged_files}
+      stage_fixed: true
+    ruff-format:
+      glob: "**/*.py"
+      run: ruff format {staged_files}
+      stage_fixed: true
+    ruff-fix:
+      glob: "**/*.py"
+      run: ruff check --fix {staged_files}
+      stage_fixed: true
+    rustfmt:
+      glob: "**/*.rs"
+      run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      stage_fixed: true
+
+pre-push:
+  commands:
+    biome:
+      run: pnpm lint:ts
+    ruff:
+      run: pnpm lint:python
+    clippy:
+      run: pnpm lint:rust
+    shellcheck:
+      run: pnpm lint:shell
+    typecheck:
+      run: pnpm typecheck
