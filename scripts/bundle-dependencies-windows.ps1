@@ -34,6 +34,7 @@ Write-Host "`n=== Step 1: Python ===" -ForegroundColor Yellow
 $pythonVersion = "3.12.0"
 $pythonArch = "amd64"
 $pythonZipUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-$pythonArch.zip"
+$getPipUrl = "https://raw.githubusercontent.com/pypa/get-pip/69fd2a8ffdc323a975d2f15eb4c2766cf28daaf7/public/get-pip.py"
 $expectedPythonZipHash = "c87f000e3dae1a572e98e81daeb622f8bc6f22664093fc9c70989b5f0018d49b"
 $expectedGetPipHash = "feba1c697df45be1b539b40d93c102c9ee9dde1d966303323b830b06f3fbca3c"
 
@@ -57,7 +58,7 @@ if ($null -ne $pthFile) {
 
 Write-Host "Installing pip + requirements..."
 try {
-    Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
+    Invoke-WebRequest -Uri $getPipUrl -OutFile get-pip.py
     Assert-Sha256 -Path "get-pip.py" -ExpectedHash $expectedGetPipHash -Label "get-pip.py"
     & (Join-Path $pythonDir "python.exe") get-pip.py
     Remove-Item get-pip.py

@@ -30,8 +30,9 @@ python3 -m venv --copies "$PYTHON_DIR"
 "$PYTHON_DIR/bin/pip" install -r python/requirements.txt
 
 PYTHON_VERSION=$($PYTHON_DIR/bin/python3 --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
+PYTHON_DIR_ABS="$(cd "$PYTHON_DIR" && pwd)"
 cat > "$PYTHON_DIR/pyvenv.cfg" <<PYVENV
-home = bin
+home = $PYTHON_DIR_ABS/bin
 include-system-site-packages = false
 version = $PYTHON_VERSION
 executable = bin/python3

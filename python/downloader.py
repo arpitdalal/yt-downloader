@@ -164,6 +164,9 @@ class YouTubeDownloader:
             # Use OS-aware temp directory
             self.output_dir = Path(tempfile.gettempdir())
             self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._last_extract_url: Optional[str] = None
+        self._last_extract_info: Optional[dict] = None
+        self._last_extract_ydl_opts: Optional[dict] = None
     
     def _get_temp_dir(self) -> Path:
         """Get OS-aware temporary directory"""
@@ -263,20 +266,6 @@ class YouTubeDownloader:
         ]
 
     @staticmethod
-    def _is_access_restriction_error(error_message: str) -> bool:
-        msg = error_message.lower()
-        patterns = [
-            "403",
-            "forbidden",
-            "confirm you’re not a bot",
-            "confirm you're not a bot",
-            "too many requests",
-            "http error 429",
-            "requested format is not available",
-        ]
-        return any(pattern in msg for pattern in patterns)
-
-    @staticmethod
     def _cache_key(video_id: str) -> str:
         return f"{video_id}_{CACHE_KEY_VERSION}"
 
@@ -331,7 +320,14 @@ class YouTubeDownloader:
             p for p in user_data.iterdir()
             if p.is_dir() and (p.name == 'Default' or p.name.startswith('Profile '))
         ]
-        profile_dirs.sort(key=lambda p: (p / 'Cookies').stat().st_mtime if (p / 'Cookies').exists() else 0, reverse=True)
+        def _cookie_mtime(profile_dir: Path) -> float:
+            try:
+                cookie_db = profile_dir / 'Cookies'
+                return cookie_db.stat().st_mtime if cookie_db.exists() else 0
+            except OSError:
+                return 0
+
+        profile_dirs.sort(key=_cookie_mtime, reverse=True)
         for profile_dir in profile_dirs:
             if (profile_dir / 'Cookies').exists():
                 return str(profile_dir)
@@ -366,16 +362,36 @@ class YouTubeDownloader:
         return None
 
     @staticmethod
-    def _extract_format_capabilities(url: str) -> dict:
+    def _extract_format_capabilities(
+        url: str,
+        info: Optional[dict] = None,
+        ydl_opts: Optional[dict] = None,
+    ) -> dict:
         """Inspect available formats so we can compare selected vs max possible quality."""
-        ydl_opts = {
+        extract_opts = {
             'quiet': True,
             'no_warnings': True,
         }
+        if ydl_opts:
+            extract_opts.update(ydl_opts)
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception:
+            if info is None:
+                with yt_dlp.YoutubeDL(extract_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+        except (
+            yt_dlp.utils.DownloadError,
+            yt_dlp.utils.ExtractorError,
+            AttributeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            return {
+                'max_adaptive_height': None,
+                'max_progressive_height': None,
+            }
+
+        if not isinstance(info, dict):
             return {
                 'max_adaptive_height': None,
                 'max_progressive_height': None,
@@ -404,13 +420,25 @@ class YouTubeDownloader:
         except Exception:
             pass
 
-    @staticmethod
-    def _probe_video_height(file_path: Path) -> Optional[int]:
+    def _resolve_ffprobe_path(self) -> Optional[str]:
+        ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
+        if ffmpeg_path:
+            ffmpeg_binary = Path(ffmpeg_path)
+            ffprobe_name = 'ffprobe.exe' if ffmpeg_binary.suffix.lower() == '.exe' else 'ffprobe'
+            ffprobe_candidate = ffmpeg_binary.with_name(ffprobe_name)
+            if ffprobe_candidate.exists():
+                return str(ffprobe_candidate)
+        return shutil.which('ffprobe')
+
+    def _probe_video_height(self, file_path: Path) -> Optional[int]:
         """Read video height via ffprobe for cache quality validation."""
+        ffprobe_path = self._resolve_ffprobe_path()
+        if not ffprobe_path:
+            return None
         try:
             result = subprocess.run(
                 [
-                    'ffprobe',
+                    ffprobe_path,
                     '-v',
                     'error',
                     '-select_streams',
@@ -434,7 +462,7 @@ class YouTubeDownloader:
                 return None
             height = streams[0].get('height')
             return int(height) if isinstance(height, int) else None
-        except Exception:
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError, TypeError):
             return None
 
     def _cleanup_incomplete_download_files(self, temp_dir: Path, cache_video_id: str) -> None:
@@ -551,6 +579,9 @@ class YouTubeDownloader:
     
     def extract_video_info(self, url: str) -> Optional[VideoInfo]:
         """Extract video information without downloading. Uses --cookies-from-browser for first detected browser only."""
+        self._last_extract_url = None
+        self._last_extract_info = None
+        self._last_extract_ydl_opts = None
         base_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -600,6 +631,9 @@ class YouTubeDownloader:
                         info['release_timestamp']
                     ).isoformat()
 
+                self._last_extract_url = url
+                self._last_extract_info = info if isinstance(info, dict) else None
+                self._last_extract_ydl_opts = dict(ydl_opts)
                 return VideoInfo(
                     id=info.get('id', ''),
                     title=info.get('title', ''),
@@ -1033,7 +1067,11 @@ class YouTubeDownloader:
         
         # Initialize progress tracker
         progress_tracker = DownloadProgressTracker()
-        format_caps = self._extract_format_capabilities(url)
+        format_caps = self._extract_format_capabilities(
+            url,
+            info=self._last_extract_info if self._last_extract_url == url else None,
+            ydl_opts=self._last_extract_ydl_opts if self._last_extract_url == url else None,
+        )
         allow_low_quality = self._is_truthy_env('YT_DLP_ALLOW_LOW_QUALITY_FALLBACK', default=False)
         browser_cookies_enabled = self._is_truthy_env('YT_DLP_ENABLE_BROWSER_COOKIES', default=False)
         cookie_browsers = self._browser_cookie_candidates() if browser_cookies_enabled else []
