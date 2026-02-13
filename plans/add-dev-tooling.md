@@ -115,36 +115,36 @@ Keep existing `typecheck`, `python:typecheck`, `test:*` scripts unchanged.
 Create [lefthook.yml](lefthook.yml) at repo root:
 
 ```yaml
+glob_matcher: doublestar
+
 pre-commit:
   commands:
     biome:
-      glob: "*.{ts,tsx,js,jsx,json}"
+      glob: "**/*.{ts,tsx,js,jsx,json}"
       run: pnpm biome check --write {staged_files}
       stage_fixed: true
     ruff-format:
-      glob: "*.py"
+      glob: "**/*.py"
       run: ruff format {staged_files}
       stage_fixed: true
     ruff-fix:
-      glob: "*.py"
+      glob: "**/*.py"
       run: ruff check --fix {staged_files}
       stage_fixed: true
     rustfmt:
-      glob: "*.rs"
+      glob: "**/*.rs"
       run: cargo fmt --manifest-path src-tauri/Cargo.toml
       stage_fixed: true
 
 pre-push:
   commands:
     biome:
-      glob: "*.{ts,tsx,js,jsx,json}"
       run: pnpm lint:ts
     ruff:
       run: pnpm lint:python
     clippy:
       run: pnpm lint:rust
     shellcheck:
-      glob: "*.sh"
       run: pnpm lint:shell
     typecheck:
       run: pnpm typecheck
