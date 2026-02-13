@@ -11,6 +11,8 @@ export interface VideoInfo {
   scheduled_start_time: string | null;
   thumbnail: string | null;
   uploader: string | null;
+  view_count: number | null;
+  upload_date: string | null;
 }
 
 export interface DownloadProgressData {

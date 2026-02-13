@@ -74,6 +74,13 @@ export default function App() {
     void refreshYouTubeAuthStatus();
   }, []);
 
+  const isYouTubeAuthError = (message: string): boolean => {
+    return (
+      /sign in to confirm you[’']re not a bot/i.test(message) ||
+      message.includes("YOUTUBE_AUTH")
+    );
+  };
+
   const getErrorMessage = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
 
@@ -105,9 +112,7 @@ export default function App() {
     ) {
       return "The requested video quality is not available. Please try again.";
     }
-    const requiresYouTubeSignIn =
-      /sign in to confirm you[’']re not a bot/i.test(message) ||
-      message.includes("YOUTUBE_AUTH");
+    const requiresYouTubeSignIn = isYouTubeAuthError(message);
     if (requiresYouTubeSignIn) {
       return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
     }
@@ -397,6 +402,9 @@ export default function App() {
         errorMessage.includes("Processing canceled by user")
       ) {
         return;
+      }
+      if (isYouTubeAuthError(errorMessage)) {
+        void refreshYouTubeAuthStatus();
       }
       setStatus("error");
       setError(getErrorMessage(err));

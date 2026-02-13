@@ -1703,19 +1703,18 @@ class TestDownloadVideo:
         )):
             with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
                 with patch.object(downloader, '_find_downloaded_file', return_value=None):
-                    # The code uses temp_dir.glob() to find part files
-                    # Since we're using the actual temp_dir, the glob will find the part file
-                    result = downloader.download_video(
-                        'https://youtube.com/watch?v=test',
-                        str(output_file)
-                    )
-                    # Should detect incomplete download
-                    assert result.success is False
-                    assert (
-                        'incomplete' in result.error_message.lower()
-                        or '.part' in result.error_message.lower()
-                        or 'file not found' in result.error_message.lower()
-                    )
+                    # Keep the fixture .part file to validate incomplete-file detection.
+                    with patch.object(downloader, '_cleanup_incomplete_download_files', return_value=None):
+                        result = downloader.download_video(
+                            'https://youtube.com/watch?v=test',
+                            str(output_file)
+                        )
+                        # Should detect incomplete download
+                        assert result.success is False
+                        assert (
+                            'incomplete' in result.error_message.lower()
+                            or '.part' in result.error_message.lower()
+                        )
     
     def test_build_format_selectors_excludes_progressive_best(self):
         """Default selectors should prioritize MP4-compatible formats."""
