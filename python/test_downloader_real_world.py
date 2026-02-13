@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-
 RUN_REAL_WORLD_TESTS = os.environ.get("RUN_REAL_WORLD_TESTS", "").strip().lower() in {
     "1",
     "true",
@@ -55,13 +54,22 @@ def _parse_last_json_object(text: str) -> dict | None:
 def _run_ffmpeg_integrity_check(file_path: Path, ffmpeg_path: str) -> None:
     """Decode first 5s of file; proves playable and FFmpeg works. Raises on failure."""
     result = subprocess.run(
-        [ffmpeg_path, "-v", "error", "-i", str(file_path), "-t", "5", "-f", "null", "-"],
+        [
+            ffmpeg_path,
+            "-v",
+            "error",
+            "-i",
+            str(file_path),
+            "-t",
+            "5",
+            "-f",
+            "null",
+            "-",
+        ],
         capture_output=True,
         timeout=30,
     )
-    assert result.returncode == 0, (
-        f"FFmpeg integrity check failed: {result.stderr.decode('utf-8', errors='replace')}"
-    )
+    assert result.returncode == 0, f"FFmpeg integrity check failed: {result.stderr.decode('utf-8', errors='replace')}"
 
 
 @pytest.mark.parametrize("url", REAL_WORLD_URLS)
@@ -73,8 +81,7 @@ def test_extract_video_info_cli(url: str) -> None:
     process = subprocess.run(
         command,
         env={**os.environ, "YT_DLP_ENABLE_BROWSER_COOKIES": "false"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         timeout=120,
     )
@@ -112,8 +119,7 @@ def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
     process = subprocess.run(
         command,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         timeout=900,
     )

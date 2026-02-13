@@ -1354,7 +1354,9 @@ mod tests {
         assert!(is_auth_debug_line(
             r#"{"type":"auth_debug","event":"extract_attempt"}"#
         ));
-        assert!(!is_auth_debug_line(r#"{"type":"quality_debug","event":"x"}"#));
+        assert!(!is_auth_debug_line(
+            r#"{"type":"quality_debug","event":"x"}"#
+        ));
     }
 
     #[test]

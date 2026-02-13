@@ -1,0 +1,19 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.0/schema.json",
+	"files": {
+		"includes": ["app/**", "vite.config.ts", "scripts/prebuild.js"]
+	},
+	"formatter": {
+		"indentStyle": "tab"
+	},
+	"linter": {
+		"rules": {
+			"recommended": true
+		}
+	},
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	}
+}
