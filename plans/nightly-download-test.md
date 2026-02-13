@@ -4,10 +4,10 @@ overview: Fix the existing real-world test to match the actual app behavior (qua
 todos:
   - id: fix-test
     content: "Fix `python/test_downloader_real_world.py`: quality string, sections, remove low-quality fallback, add stable URLs, add info-extraction test, add FFmpeg video integrity check"
-    status: in_progress
+    status: completed
   - id: create-workflow
     content: Create `.github/workflows/nightly-download-test.yml` with schedule, matrix, bundle-dependencies, bundled-Python pytest invocation, and failure notification job
-    status: pending
+    status: completed
 isProject: false
 ---
 
