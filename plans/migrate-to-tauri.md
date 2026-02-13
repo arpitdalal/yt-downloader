@@ -7,12 +7,12 @@
 - Out of scope: code signing/notarization, updater, mobile targets.
 
 ## Public API / Interface Changes
-- Remove renderer bridge `window.electronAPI` from `/Users/arpit.dalal/personal/yt-downloader/app/lib/electron-api.ts`.
-- Add typed Tauri API wrapper `/Users/arpit.dalal/personal/yt-downloader/app/lib/tauri-api.ts` using:
+- Remove renderer bridge `window.electronAPI` from `app/lib/electron-api.ts`.
+- Add typed Tauri API wrapper `app/lib/tauri-api.ts` using:
   1. `invoke` from `@tauri-apps/api/core`
   2. `listen` from `@tauri-apps/api/event`
   3. `open/save` from `@tauri-apps/plugin-dialog`
-- Backend IPC contract moves to Rust commands in `/Users/arpit.dalal/personal/yt-downloader/src-tauri/src/lib.rs`:
+- Backend IPC contract moves to Rust commands in `src-tauri/src/lib.rs`:
   1. `extract_video_info(url: String) -> VideoInfo`
   2. `download_video(payload: DownloadOptions) -> DownloadResult`
   3. `process_local_video(payload: ProcessLocalOptions) -> DownloadResult`
@@ -33,51 +33,51 @@
 
 ## Tasks
 
-## [ ] T0. Create migration tracking artifacts
+## [x] T0. Create migration tracking artifacts
 Dependencies: none.
 Steps:
-1. Create `/Users/arpit.dalal/personal/yt-downloader/plans/migrate-to-tauri.md` with this plan.
-2. Create `/Users/arpit.dalal/personal/yt-downloader/plans/migrate-to-tauri-checklist.md` with one checkbox per task + gate status table.
+1. Create `plans/migrate-to-tauri.md` with this plan.
+2. Create `plans/migrate-to-tauri-checklist.md` with one checkbox per task + gate status table.
 3. Create branch `codex/tauri-migration`.
 Done when: both docs committed; branch created.
 Build gate: run `tauri-gate`.
 
-## [ ] T1. Scaffold Tauri v2 without removing Electron
+## [x] T1. Scaffold Tauri v2 without removing Electron
 Dependencies: T0.
 Steps:
-1. Add Tauri packages to `/Users/arpit.dalal/personal/yt-downloader/package.json` (`@tauri-apps/cli`, `@tauri-apps/api`, `@tauri-apps/plugin-dialog`, `@tauri-apps/plugin-log`).
-2. Initialize `/Users/arpit.dalal/personal/yt-downloader/src-tauri/` with Rust crate.
-3. Set `/Users/arpit.dalal/personal/yt-downloader/src-tauri/tauri.conf.json`:
+1. Add Tauri packages to `package.json` (`@tauri-apps/cli`, `@tauri-apps/api`, `@tauri-apps/plugin-dialog`, `@tauri-apps/plugin-log`).
+2. Initialize `src-tauri/` with Rust crate.
+3. Set `src-tauri/tauri.conf.json`:
 - `identifier: "com.ytdownloader.app"`
 - `productName: "YouTube Downloader"`
 - `build.devUrl: "http://localhost:5173"`
 - `build.beforeDevCommand: "pnpm dev:renderer"`
 - `build.beforeBuildCommand: "pnpm build"`
 - `build.frontendDist: "../dist"`
-4. Add scripts in `/Users/arpit.dalal/personal/yt-downloader/package.json`:
+4. Add scripts in `package.json`:
 - `tauri:dev`
 - `tauri:build`
 - `tauri:build:mac`
 - `tauri:build:win`
 - `tauri:build:linux`
-5. Add `/Users/arpit.dalal/personal/yt-downloader/src-tauri/capabilities/default.json` with permissions: `core:default`, `dialog:default`, `log:default`.
+5. Add `src-tauri/capabilities/default.json` with permissions: `core:default`, `dialog:default`, `log:default`.
 Done when: `pnpm tauri:dev` opens app shell with current frontend.
 Build gate: run `tauri-gate`.
 
-## [ ] T2. Implement Rust domain models + validation parity
+## [x] T2. Implement Rust domain models + validation parity
 Dependencies: T1.
 Steps:
-1. In `/Users/arpit.dalal/personal/yt-downloader/src-tauri/src/lib.rs`, add serde structs mirroring TS types in `/Users/arpit.dalal/personal/yt-downloader/app/lib/electron-api.ts`.
-2. Port validation logic from `/Users/arpit.dalal/personal/yt-downloader/electron/main.js`:
+1. In `src-tauri/src/lib.rs`, add serde structs mirroring TS types in `app/lib/electron-api.ts`.
+2. Port validation logic from `electron/main.js`:
 - YouTube host allowlist.
 - save path restricted to user home.
 - section ordering/integer checks.
 3. Add uniform error mapping with stable user-safe messages.
-4. Add unit tests in `/Users/arpit.dalal/personal/yt-downloader/src-tauri/src/lib.rs` (or `src-tauri/src/tests.rs`) for validators.
+4. Add unit tests in `src-tauri/src/lib.rs` (or `src-tauri/src/tests.rs`) for validators.
 Done when: Rust tests pass and behavior equals Electron validation contract.
 Build gate: run `tauri-gate`.
 
-## [ ] T3. Implement Python process orchestration in Rust
+## [x] T3. Implement Python process orchestration in Rust
 Dependencies: T2.
 Steps:
 1. Add shared app state for active child process + cancel flag (`Arc<Mutex<Option<Child>>>`, `AtomicBool`).
@@ -94,11 +94,11 @@ Steps:
 Done when: all command flows execute from Rust with same JSON IO contract as current Electron main process.
 Build gate: run `tauri-gate`.
 
-## [ ] T4. Migrate frontend integration to Tauri APIs
+## [x] T4. Migrate frontend integration to Tauri APIs
 Dependencies: T3.
 Steps:
-1. Replace `/Users/arpit.dalal/personal/yt-downloader/app/lib/electron-api.ts` with `/Users/arpit.dalal/personal/yt-downloader/app/lib/tauri-api.ts`.
-2. Update `/Users/arpit.dalal/personal/yt-downloader/app/App.tsx` imports and calls:
+1. Replace `app/lib/electron-api.ts` with `app/lib/tauri-api.ts`.
+2. Update `app/App.tsx` imports and calls:
 - `invoke` for commands
 - `listen`/`unlisten` for progress events
 - `open`/`save` plugin dialog APIs
@@ -107,50 +107,50 @@ Steps:
 Done when: full user flow works in `pnpm tauri:dev` with no Electron codepath usage.
 Build gate: run `tauri-gate`.
 
-## [ ] T5. Logging migration and debug parity
+## [x] T5. Logging migration and debug parity
 Dependencies: T4.
 Steps:
 1. Register `tauri-plugin-log` in Rust builder.
 2. Configure log targets to file + stdout; set app log directory via plugin configuration.
 3. Add command `get_log_info` returning resolved log path and app/resource paths.
 4. Update frontend wrapper type for `get_log_info`.
-5. Update `/Users/arpit.dalal/personal/yt-downloader/DEBUGGING.md` log locations and commands for Tauri.
+5. Update `DEBUGGING.md` log locations and commands for Tauri.
 Done when: packaged app writes logs; debug doc paths verified on all OS gate runners.
 Build gate: run `tauri-gate`.
 
-## [ ] T6. Resource bundling migration (Python + FFmpeg)
+## [x] T6. Resource bundling migration (Python + FFmpeg)
 Dependencies: T3, T5.
 Steps:
-1. Move bundling outputs to `/Users/arpit.dalal/personal/yt-downloader/src-tauri/resources/python` and `/Users/arpit.dalal/personal/yt-downloader/src-tauri/resources/ffmpeg`.
+1. Move bundling outputs to `src-tauri/resources/python` and `src-tauri/resources/ffmpeg`.
 2. Update scripts:
-- `/Users/arpit.dalal/personal/yt-downloader/scripts/bundle-dependencies-macos.sh`
-- `/Users/arpit.dalal/personal/yt-downloader/scripts/bundle-dependencies-linux.sh`
-- `/Users/arpit.dalal/personal/yt-downloader/scripts/bundle-dependencies-windows.ps1`
-3. Update `/Users/arpit.dalal/personal/yt-downloader/src-tauri/tauri.conf.json` `bundle.resources` mapping for those directories.
+- `scripts/bundle-dependencies-macos.sh`
+- `scripts/bundle-dependencies-linux.sh`
+- `scripts/bundle-dependencies-windows.ps1`
+3. Update `src-tauri/tauri.conf.json` `bundle.resources` mapping for those directories.
 4. Verify runtime lookup in Rust matches packaged structure.
 Done when: packaged app finds Python/FFmpeg on all 3 OS gates and can execute one smoke command.
 Build gate: run `tauri-gate`.
 
-## [ ] T7. Packaging parity configuration
+## [x] T7. Packaging parity configuration
 Dependencies: T6.
 Steps:
 1. Configure bundle targets to match Electron outputs:
 - macOS: `dmg`
 - Windows: `nsis`
 - Linux: `appimage`, `deb`, `rpm`
-2. Keep icon set from `/Users/arpit.dalal/personal/yt-downloader/build/icons`.
+2. Keep icon set from `build/icons`.
 3. Keep app identity (`com.ytdownloader.app`, `YouTube Downloader`).
 4. Add platform-specific config files if needed:
-- `/Users/arpit.dalal/personal/yt-downloader/src-tauri/tauri.macos.conf.json`
-- `/Users/arpit.dalal/personal/yt-downloader/src-tauri/tauri.windows.conf.json`
-- `/Users/arpit.dalal/personal/yt-downloader/src-tauri/tauri.linux.conf.json`
+- `src-tauri/tauri.macos.conf.json`
+- `src-tauri/tauri.windows.conf.json`
+- `src-tauri/tauri.linux.conf.json`
 Done when: installers produced in same family as current Electron outputs.
 Build gate: run `tauri-gate`.
 
-## [ ] T8. CI migration for milestone gates + release matrix
+## [x] T8. CI migration for milestone gates + release matrix
 Dependencies: T7.
 Steps:
-1. Replace Electron workflows in `/Users/arpit.dalal/personal/yt-downloader/.github/workflows/` with:
+1. Replace Electron workflows in `.github/workflows/` with:
 - `tauri-gate.yml` (primary arch per OS, every PR/push).
 - `tauri-release.yml` (full arch matrix on tags).
 2. Each workflow runs resource bundling before `tauri build`.
@@ -159,20 +159,20 @@ Steps:
 Done when: `tauri-gate` required check enforced; `tauri-release` produces full artifact matrix.
 Build gate: run `tauri-gate`.
 
-## [ ] T9. Remove Electron code and configs
+## [x] T9. Remove Electron code and configs
 Dependencies: T8.
 Steps:
-1. Delete `/Users/arpit.dalal/personal/yt-downloader/electron/`.
-2. Remove Electron deps/scripts/build config from `/Users/arpit.dalal/personal/yt-downloader/package.json`.
+1. Delete `electron/`.
+2. Remove Electron deps/scripts/build config from `package.json`.
 3. Remove Electron-only scripts no longer used.
 4. Update docs:
-- `/Users/arpit.dalal/personal/yt-downloader/README.md`
-- `/Users/arpit.dalal/personal/yt-downloader/BUILD.md`
-- `/Users/arpit.dalal/personal/yt-downloader/DEBUGGING.md`
+- `README.md`
+- `BUILD.md`
+- `DEBUGGING.md`
 Done when: repo has no runtime Electron dependency and docs fully Tauri-aligned.
 Build gate: run `tauri-gate`.
 
-## [ ] T10. Final verification and cutover
+## [x] T10. Final verification and cutover
 Dependencies: T9.
 Steps:
 1. Run manual smoke matrix:

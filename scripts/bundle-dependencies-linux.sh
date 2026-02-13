@@ -12,7 +12,8 @@ printf '%s\n' "Bundling dependencies for Linux (Tauri resources)..."
 if [[ "$OSTYPE" == darwin* ]]; then
   echo "WARNING: running Linux bundling script on macOS."
   echo "Generated Python/FFmpeg binaries will be macOS binaries."
-  echo "Use a Linux runner for release artifacts."
+  echo "Use a Linux runner for release artifacts. Exiting on macOS to avoid BSD/GNU tool incompatibilities."
+  exit 1
 fi
 
 rm -rf "$PYTHON_DIR" "$FFMPEG_DIR"
@@ -37,12 +38,11 @@ executable = bin/python3
 PYVENV
 
 find "$PYTHON_DIR/bin" -type f -name "*.py" -exec sed -i "1s|^#!.*python.*|#!/usr/bin/env python3|" {} \;
-find "$PYTHON_DIR/bin" -type f ! -name "*.py" -exec grep -l "^#!.*python" {} \; | while read -r script; do
+while IFS= read -r script; do
   sed -i "1s|^#!.*|#!/usr/bin/env python3|" "$script"
-done
+done < <(find "$PYTHON_DIR/bin" -type f ! -name "*.py" -exec grep -l "^#!.*python" {} + || true)
 
-chmod +x "$PYTHON_DIR/bin/python3"
-find "$PYTHON_DIR/bin" -type f -exec chmod +x {} \;
+find "$PYTHON_DIR/bin" -type f \( -name "python*" -o -name "pip*" -o -name "*.py" \) -exec chmod +x {} \;
 cp python/downloader.py "$PYTHON_DIR/downloader.py"
 
 echo "OK: Python bundled at $PYTHON_DIR"

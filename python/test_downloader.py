@@ -1453,17 +1453,22 @@ class TestDownloadVideo:
         )):
             with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
                 with patch.object(downloader, '_get_cached_video_path', return_value=str(cached_file)):
-                    with patch.object(downloader, '_check_file_stability', return_value=True):
-                        with patch('downloader.shutil.copy2') as mock_copy:
-                            def copy_side_effect(src, dst):
-                                Path(dst).write_bytes(b'copied data')
-                            mock_copy.side_effect = copy_side_effect
-                            result = downloader.download_video(
-                                'https://youtube.com/watch?v=test',
-                                str(output_file)
-                            )
-                            assert result.success is True
-                            assert result.file_path == str(output_file)
+                    with patch.object(
+                        downloader,
+                        '_extract_format_capabilities',
+                        return_value={'max_adaptive_height': None, 'max_progressive_height': None},
+                    ):
+                        with patch.object(downloader, '_check_file_stability', return_value=True):
+                            with patch('downloader.shutil.copy2') as mock_copy:
+                                def copy_side_effect(src, dst):
+                                    Path(dst).write_bytes(b'copied data')
+                                mock_copy.side_effect = copy_side_effect
+                                result = downloader.download_video(
+                                    'https://youtube.com/watch?v=test',
+                                    str(output_file)
+                                )
+                                assert result.success is True
+                                assert result.file_path == str(output_file)
 
     def test_download_uses_versioned_cache_key(self, temp_dir, sample_video_info):
         """Cache lookup should use versioned key to avoid stale legacy quality cache."""
@@ -1485,16 +1490,21 @@ class TestDownloadVideo:
             upload_date=None
         )):
             with patch.object(downloader, '_get_temp_dir', return_value=temp_dir):
-                with patch.object(downloader, '_check_file_stability', return_value=True):
-                    with patch('downloader.shutil.copy2') as mock_copy:
-                        mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b'copied data')
-                        with patch.object(downloader, '_get_cached_video_path', wraps=downloader._get_cached_video_path) as wrapped_cache:
-                            result = downloader.download_video(
-                                'https://youtube.com/watch?v=test',
-                                str(output_file)
-                            )
-                            assert result.success is True
-                            wrapped_cache.assert_called_once_with(f"{sample_video_info['id']}_{CACHE_KEY_VERSION}")
+                with patch.object(
+                    downloader,
+                    '_extract_format_capabilities',
+                    return_value={'max_adaptive_height': None, 'max_progressive_height': None},
+                ):
+                    with patch.object(downloader, '_check_file_stability', return_value=True):
+                        with patch('downloader.shutil.copy2') as mock_copy:
+                            mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b'copied data')
+                            with patch.object(downloader, '_get_cached_video_path', wraps=downloader._get_cached_video_path) as wrapped_cache:
+                                result = downloader.download_video(
+                                    'https://youtube.com/watch?v=test',
+                                    str(output_file)
+                                )
+                                assert result.success is True
+                                wrapped_cache.assert_called_once_with(f"{sample_video_info['id']}_{CACHE_KEY_VERSION}")
     
     def test_download_copies_outside_temp_for_cache(self, temp_dir, sample_video_info, mock_ytdlp_download):
         """Ensure downloaded file outside temp is copied into temp cache"""

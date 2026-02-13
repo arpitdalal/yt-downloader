@@ -1170,6 +1170,8 @@ class YouTubeDownloader:
                 extra_opts = profile["extra_opts"]
 
                 for format_selector in format_selectors:
+                    progress_tracker.selected_format = None
+                    progress_tracker.final_file_path = None
                     self._emit_debug_event(
                         'quality_debug',
                         {

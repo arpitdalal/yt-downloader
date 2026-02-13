@@ -567,17 +567,24 @@ fn run_tracked_process(
         output
     });
 
-    let status = {
-        let mut guard = state
-            .current_process
-            .lock()
-            .map_err(|_| "Failed to acquire process lock".to_string())?;
-        let process = guard
-            .as_mut()
-            .ok_or_else(|| "Process state lost before completion".to_string())?;
-        process
-            .wait()
-            .map_err(|error| format!("Failed waiting for python process: {error}"))?
+    let status = loop {
+        let maybe_status = {
+            let mut guard = state
+                .current_process
+                .lock()
+                .map_err(|_| "Failed to acquire process lock".to_string())?;
+            let process = guard
+                .as_mut()
+                .ok_or_else(|| "Process state lost before completion".to_string())?;
+            process
+                .try_wait()
+                .map_err(|error| format!("Failed waiting for python process: {error}"))?
+        };
+
+        if let Some(status) = maybe_status {
+            break status;
+        }
+        thread::sleep(std::time::Duration::from_millis(150));
     };
 
     {

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -34,12 +34,10 @@ export interface YouTubeAuthStatus {
 }
 
 let unlistenDownloadProgress: UnlistenFn | null = null;
+let downloadProgressListenerSeq = 0;
 
 function ensureTauriRuntime() {
-  if (
-    typeof window === "undefined" ||
-    !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-  ) {
+  if (!isTauri()) {
     throw new Error(
       "Tauri API is not available. Please run this app inside a Tauri window."
     );
@@ -133,14 +131,24 @@ export const tauriAPI = {
 
   onDownloadProgress(callback: (data: DownloadProgressData) => void): void {
     ensureTauriRuntime();
+    const listenerSeq = ++downloadProgressListenerSeq;
+    if (unlistenDownloadProgress) {
+      void unlistenDownloadProgress();
+      unlistenDownloadProgress = null;
+    }
     void listen<DownloadProgressData>("download-progress", (event) => {
       callback(event.payload);
     }).then((unlisten) => {
+      if (listenerSeq !== downloadProgressListenerSeq) {
+        void unlisten();
+        return;
+      }
       unlistenDownloadProgress = unlisten;
     });
   },
 
   removeDownloadProgressListener(): void {
+    downloadProgressListenerSeq += 1;
     if (unlistenDownloadProgress) {
       void unlistenDownloadProgress();
       unlistenDownloadProgress = null;

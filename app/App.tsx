@@ -105,13 +105,10 @@ export default function App() {
     ) {
       return "The requested video quality is not available. Please try again.";
     }
-    if (
-      message.includes("Sign in to confirm you’re not a bot") ||
-      message.includes("Sign in to confirm you're not a bot")
-    ) {
-      return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
-    }
-    if (message.includes("YOUTUBE_AUTH")) {
+    const requiresYouTubeSignIn =
+      /sign in to confirm you[’']re not a bot/i.test(message) ||
+      message.includes("YOUTUBE_AUTH");
+    if (requiresYouTubeSignIn) {
       return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
     }
     if (message.includes("High-quality stream is available up to")) {
@@ -266,7 +263,6 @@ export default function App() {
       }
     } catch (err) {
       console.error("Failed to choose file:", err);
-      const message = err instanceof Error ? err.message : String(err);
       setError(
         err instanceof Error ? err.message : "Failed to open file picker"
       );

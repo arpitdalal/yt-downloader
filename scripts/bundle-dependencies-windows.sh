@@ -8,6 +8,7 @@ PYTHON_DIR="$RESOURCES_ROOT/python"
 FFMPEG_DIR="$RESOURCES_ROOT/ffmpeg"
 
 echo "Bundling dependencies for Windows (Tauri resources)..."
+rm -rf "$PYTHON_DIR" "$FFMPEG_DIR"
 mkdir -p "$PYTHON_DIR" "$FFMPEG_DIR"
 
 echo ""

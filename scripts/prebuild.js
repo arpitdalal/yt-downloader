@@ -58,7 +58,10 @@ async function ensureResourcesDirs() {
         }
         // If directory is empty, that's expected before bundling - no warning needed
       } catch (error) {
-        // Directory might be empty, that's okay for now
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `Warning: Could not read ${dir.name} directory (${dir.path}): ${message}`
+        );
       }
     }
   }
