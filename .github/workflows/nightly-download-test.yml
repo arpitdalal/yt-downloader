@@ -37,6 +37,12 @@ jobs:
         shell: pwsh
         run: ./scripts/bundle-dependencies-windows.ps1
 
+      - name: Verify bundled Python path (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          PYTHON="${{ github.workspace }}/src-tauri/resources/python/bin/python3"
+          test -f "$PYTHON" || (echo "Bundled Python not found at $PYTHON" && ls -la "${{ github.workspace }}/src-tauri/resources/python/bin/" 2>/dev/null || true && exit 1)
+
       - name: Run real-world download tests (macOS/Linux)
         if: runner.os != 'Windows'
         env:
@@ -78,6 +84,8 @@ jobs:
               repo: context.repo.repo,
               state: 'open',
               creator: 'github-actions[bot]',
+              labels: 'nightly-failure',
+              per_page: 100,
             });
             const duplicate = existing.find(i => i.title === title);
             if (duplicate) {
@@ -89,4 +97,5 @@ jobs:
               repo: context.repo.repo,
               title,
               body,
+              labels: ['nightly-failure'],
             });
