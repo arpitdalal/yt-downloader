@@ -49,14 +49,19 @@ cp python/downloader.py "$PYTHON_DIR/downloader.py"
 echo "OK: Python bundled at $PYTHON_DIR"
 
 printf '\n=== Step 2: FFmpeg ===\n'
-if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "FFmpeg not found. Install ffmpeg via your package manager."
-  exit 1
-fi
+# Pinned release (yt-dlp/FFmpeg-Builds). Upgrade by choosing a newer autobuild-* tag and updating SHA + archive base.
+FFMPEG_RELEASE_TAG="autobuild-2026-02-13-14-51"
+FFMPEG_ARCHIVE_BASE="ffmpeg-N-122740-g0a629df0a8-linux64-gpl"
+FFMPEG_SHA256="2b32e14dd5c79e69d4f932e4c5800910a25aa948416dcd7ea33c60d4926b595e"
+FFMPEG_URL="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/${FFMPEG_RELEASE_TAG}/${FFMPEG_ARCHIVE_BASE}.tar.xz"
 
-cp "$(which ffmpeg)" "$FFMPEG_DIR/ffmpeg"
+curl -fSL -o ffmpeg.tar.xz "$FFMPEG_URL"
+echo "$FFMPEG_SHA256  ffmpeg.tar.xz" | sha256sum -c -
+tar -xf ffmpeg.tar.xz -C "$FFMPEG_DIR" --strip-components=2 "${FFMPEG_ARCHIVE_BASE}/bin/ffmpeg"
 chmod +x "$FFMPEG_DIR/ffmpeg"
+rm -f ffmpeg.tar.xz
 
+"$FFMPEG_DIR/ffmpeg" -version >/dev/null 2>&1 || { echo "ERROR: bundled ffmpeg binary does not execute"; exit 1; }
 echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
 printf '\n=== Summary ===\n'
