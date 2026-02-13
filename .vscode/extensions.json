@@ -1,0 +1,10 @@
+{
+	// See http://go.microsoft.com/fwlink/?LinkId=827846
+	// for the documentation about the extensions.json format
+	"recommendations": [
+		"biomejs.biome",
+		"eamodio.gitlens",
+		"redhat.vscode-yaml",
+		"streetsidesoftware.code-spell-checker" // reduce typos in the codebase
+	]
+}
