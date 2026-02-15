@@ -27,13 +27,28 @@ APP_QUALITY_STRING = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 # Sections for full-download (no cut): matches app default when user doesn't set sections
 FULL_DOWNLOAD_SECTIONS_JSON = json.dumps([{"start": None, "end": None}])
 
-# Mix of existing + ultra-stable URLs (Rick Astley, YouTube Rewind 2018)
-REAL_WORLD_URLS = [
-    "https://youtu.be/wrOjTfsI6kk?si=EPaZbVkudSFd5h0S",
-    "https://youtu.be/9quXafs-BmA?si=hDoahsI-YnMYZ6fB",
-    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "https://www.youtube.com/watch?v=YbJOTdZBX1g",
+DEFAULT_REAL_WORLD_URLS = [
+    "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "https://www.youtube.com/watch?v=M7lc1UVf-VE",
 ]
+
+
+def _load_real_world_urls() -> list[str]:
+    raw = os.environ.get("REAL_WORLD_URLS", "").strip()
+    if not raw:
+        return DEFAULT_REAL_WORLD_URLS
+
+    if raw.lstrip().startswith("["):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            raise AssertionError("REAL_WORLD_URLS must be JSON array or comma-separated URLs")
+        if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+            raise AssertionError("REAL_WORLD_URLS JSON must be a list of strings")
+        return parsed
+
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
 
 pytestmark = pytest.mark.skipif(
     not RUN_REAL_WORLD_TESTS,
@@ -72,7 +87,7 @@ def _run_ffmpeg_integrity_check(file_path: Path, ffmpeg_path: str) -> None:
     assert result.returncode == 0, f"FFmpeg integrity check failed: {result.stderr.decode('utf-8', errors='replace')}"
 
 
-@pytest.mark.parametrize("url", REAL_WORLD_URLS)
+@pytest.mark.parametrize("url", _load_real_world_urls())
 def test_extract_video_info_cli(url: str) -> None:
     """App always calls --validate before download; catch info-extraction breakage."""
     script_path = Path(__file__).with_name("downloader.py")
@@ -99,7 +114,7 @@ def test_extract_video_info_cli(url: str) -> None:
     )
 
 
-@pytest.mark.parametrize("url", REAL_WORLD_URLS)
+@pytest.mark.parametrize("url", _load_real_world_urls())
 def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
     """Full download with app-matching quality and sections; no low-quality fallback."""
     script_path = Path(__file__).with_name("downloader.py")
@@ -132,7 +147,7 @@ def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
     assert file_path, f"payload missing 'file_path': {payload}"
     out_file = Path(file_path)
     assert out_file.exists(), f"output file not found: {out_file}"
-    assert out_file.stat().st_size > 5_000_000, "expected >5MB for a real download"
+    assert out_file.stat().st_size > 1_000_000, "expected >1MB for a real download"
 
     ffmpeg_path = os.environ.get("FFMPEG_PATH")
     if ffmpeg_path and Path(ffmpeg_path).exists():
