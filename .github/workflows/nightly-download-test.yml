@@ -30,7 +30,22 @@ jobs:
 
           # Get latest yt-dlp version from PyPI
           LATEST=$(curl -sf https://pypi.org/pypi/yt-dlp/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])")
+          if [ -z "$LATEST" ]; then
+            echo "::error::Could not fetch latest yt-dlp version from PyPI"
+            exit 1
+          fi
           echo "latest=$LATEST"
+
+          # Sanity-check both look like calver (YYYY.M.D)
+          VERSION_RE='^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}$'
+          if ! [[ "$PINNED" =~ $VERSION_RE ]]; then
+            echo "::error::PINNED version '$PINNED' doesn't look like a valid yt-dlp calver"
+            exit 1
+          fi
+          if ! [[ "$LATEST" =~ $VERSION_RE ]]; then
+            echo "::error::LATEST version '$LATEST' doesn't look like a valid yt-dlp calver"
+            exit 1
+          fi
 
           echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
           echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
@@ -59,6 +74,7 @@ jobs:
             const latest = '${{ needs.check-ytdlp-version.outputs.latest }}';
             // PyPI normalizes "2026.02.04" → "2026.2.4"; GH tags keep zero-padding
             const parts = latest.split('.');
+            if (parts.length < 3) throw new Error(`Unexpected version format: ${latest}`);
             const githubTag = [parts[0], parts[1].padStart(2, '0'), parts[2].padStart(2, '0')].join('.');
             const title = `yt-dlp update available: ${pinned} → ${latest}`;
             const body = `A newer version of yt-dlp is available.\n\n**Bundled:** \`${pinned}\`\n**Latest:** \`${latest}\`\n\n**Changelog:** https://github.com/yt-dlp/yt-dlp/releases/tag/${githubTag}\n\nUpdate \`python/requirements.txt\` to \`yt-dlp>=${latest}\` and test locally.`;
