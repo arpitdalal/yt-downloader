@@ -22,6 +22,10 @@ jobs:
         run: |
           # Extract minimum pinned version from requirements.txt
           PINNED=$(grep -oP 'yt-dlp[><=]+\K[0-9.]+' python/requirements.txt)
+          if [ -z "$PINNED" ]; then
+            echo "::error::Could not extract pinned yt-dlp version from requirements.txt"
+            exit 1
+          fi
           echo "pinned=$PINNED"
 
           # Get latest yt-dlp version from PyPI
@@ -53,8 +57,11 @@ jobs:
           script: |
             const pinned = '${{ needs.check-ytdlp-version.outputs.pinned }}';
             const latest = '${{ needs.check-ytdlp-version.outputs.latest }}';
+            // PyPI normalizes "2026.02.04" → "2026.2.4"; GH tags keep zero-padding
+            const parts = latest.split('.');
+            const githubTag = [parts[0], parts[1].padStart(2, '0'), parts[2].padStart(2, '0')].join('.');
             const title = `yt-dlp update available: ${pinned} → ${latest}`;
-            const body = `A newer version of yt-dlp is available.\n\n**Bundled:** \`${pinned}\`\n**Latest:** \`${latest}\`\n\n**Changelog:** https://github.com/yt-dlp/yt-dlp/releases/tag/${latest}\n\nUpdate \`python/requirements.txt\` to \`yt-dlp>=${latest}\` and test locally.`;
+            const body = `A newer version of yt-dlp is available.\n\n**Bundled:** \`${pinned}\`\n**Latest:** \`${latest}\`\n\n**Changelog:** https://github.com/yt-dlp/yt-dlp/releases/tag/${githubTag}\n\nUpdate \`python/requirements.txt\` to \`yt-dlp>=${latest}\` and test locally.`;
             const { data: existing } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
