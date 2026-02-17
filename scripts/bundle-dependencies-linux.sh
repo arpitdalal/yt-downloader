@@ -20,30 +20,40 @@ rm -rf "$PYTHON_DIR" "$FFMPEG_DIR"
 mkdir -p "$PYTHON_DIR" "$FFMPEG_DIR"
 
 printf '\n=== Step 1: Python ===\n'
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Python 3 not found. Install python3 python3-pip python3-venv."
+PYTHON_RELEASE_TAG="20260211"
+PYTHON_BUILD_VERSION="3.10.19+20260211"
+PYTHON_ARCH="$(uname -m)"
+
+case "$PYTHON_ARCH" in
+  x86_64)
+    PYTHON_ARCHIVE_URL_NAME="cpython-${PYTHON_BUILD_VERSION//+/%2B}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+    PYTHON_SHA256="0e16ab6f0f966475ae907e739dbc2001e97b9bdd6c9e3ee9233b76c0fcf34c2c"
+    ;;
+  aarch64 | arm64)
+    PYTHON_ARCHIVE_URL_NAME="cpython-${PYTHON_BUILD_VERSION//+/%2B}-aarch64-unknown-linux-gnu-install_only.tar.gz"
+    PYTHON_SHA256="9e54900384bbd516e45ade18885735126d0f2f4de4be35558969eb17f37ecd72"
+    ;;
+  *)
+    echo "Unsupported Linux architecture for bundled Python: $PYTHON_ARCH"
+    exit 1
+    ;;
+esac
+
+PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_RELEASE_TAG}/${PYTHON_ARCHIVE_URL_NAME}"
+curl -fSL -o python.tar.gz "$PYTHON_URL"
+echo "$PYTHON_SHA256  python.tar.gz" | sha256sum -c -
+tar -xzf python.tar.gz -C "$RESOURCES_ROOT"
+rm -f python.tar.gz
+
+if [[ ! -x "$PYTHON_DIR/bin/python3" ]]; then
+  echo "ERROR: bundled Python executable missing at $PYTHON_DIR/bin/python3"
   exit 1
 fi
 
-python3 -m venv --copies "$PYTHON_DIR"
-"$PYTHON_DIR/bin/pip" install --upgrade pip
+echo "Using bundled Python: $("$PYTHON_DIR/bin/python3" --version 2>&1)"
+"$PYTHON_DIR/bin/python3" -m pip install --upgrade pip
 "$PYTHON_DIR/bin/pip" install -r python/requirements.txt
 
-PYTHON_VERSION=$($PYTHON_DIR/bin/python3 --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
-PYTHON_DIR_ABS="$(cd "$PYTHON_DIR" && pwd)"
-cat > "$PYTHON_DIR/pyvenv.cfg" <<PYVENV
-home = $PYTHON_DIR_ABS/bin
-include-system-site-packages = false
-version = $PYTHON_VERSION
-executable = bin/python3
-PYVENV
-
-find "$PYTHON_DIR/bin" -type f -name "*.py" -exec sed -i "1s|^#!.*python.*|#!/usr/bin/env python3|" {} \;
-while IFS= read -r script; do
-  sed -i "1s|^#!.*|#!/usr/bin/env python3|" "$script"
-done < <(find "$PYTHON_DIR/bin" -type f ! -name "*.py" -exec grep -l "^#!.*python" {} + || true)
-
-find "$PYTHON_DIR/bin" -type f \( -name "python*" -o -name "pip*" -o -name "*.py" \) -exec chmod +x {} \;
 cp python/downloader.py "$PYTHON_DIR/downloader.py"
 
 echo "OK: Python bundled at $PYTHON_DIR"
