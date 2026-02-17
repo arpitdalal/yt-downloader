@@ -24,19 +24,23 @@ fi
 
 echo "Verifying AppImage: $APPIMAGE"
 chmod +x "$APPIMAGE"
-TMPDIR="$(mktemp -d)"
+EXTRACT_DIR="$(mktemp -d)"
 if ! (
-  cd "$TMPDIR"
+  cd "$EXTRACT_DIR"
   "$APPIMAGE" --appimage-extract >/dev/null
   [[ -x "squashfs-root/AppRun" ]]
 ); then
   echo "ERROR: AppImage extraction failed or AppRun is missing"
-  rm -rf "$TMPDIR"
+  rm -rf "$EXTRACT_DIR"
   exit 1
 fi
-rm -rf "$TMPDIR"
+rm -rf "$EXTRACT_DIR"
 
 echo "Verifying deb package metadata: $DEB"
+if ! command -v dpkg-deb >/dev/null 2>&1; then
+  echo "ERROR: dpkg-deb is required but not found; install package 'dpkg' (or equivalent)."
+  exit 1
+fi
 dpkg-deb --info "$DEB" >/dev/null
 if ! dpkg-deb --contents "$DEB" | grep -qE '\.*/usr/bin/|\.*/opt/'; then
   echo "ERROR: deb package does not contain expected install paths"
@@ -44,6 +48,10 @@ if ! dpkg-deb --contents "$DEB" | grep -qE '\.*/usr/bin/|\.*/opt/'; then
 fi
 
 echo "Verifying rpm package metadata: $RPM"
+if ! command -v rpm >/dev/null 2>&1; then
+  echo "ERROR: rpm is required but not found; install package 'rpm'."
+  exit 1
+fi
 rpm -qpi "$RPM" >/dev/null
 if ! rpm -qpl "$RPM" | grep -qE '/usr/bin/|/opt/'; then
   echo "ERROR: rpm package does not contain expected install paths"

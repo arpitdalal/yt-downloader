@@ -39,5 +39,4 @@ resources/
 # Tauri build artifacts
 src-tauri/target/
 
-.env
 .env*

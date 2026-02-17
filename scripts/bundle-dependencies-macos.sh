@@ -45,15 +45,27 @@ fi
 
 echo "Using bundled Python: $("$PYTHON_DIR/bin/python3" --version 2>&1)"
 "$PYTHON_DIR/bin/python3" -m pip install --upgrade pip
-"$PYTHON_DIR/bin/pip" install -r python/requirements.txt
+"$PYTHON_DIR/bin/python3" -m pip install -r python/requirements.txt
 
 cp python/downloader.py "$PYTHON_DIR/downloader.py"
 
 echo "OK: Python bundled at $PYTHON_DIR"
 
 printf '\n=== Step 2: FFmpeg ===\n'
-FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1770834055_N-122712-g7e3781e3ca/ffmpeg.zip"
-FFMPEG_SHA256="7c2062101bff5bceb804f8be56e3b697f9f044fb4498e5c6005ece4a6ead8b7e"
+case "$PYTHON_ARCH" in
+  arm64 | aarch64)
+    FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1766430132_8.0.1/ffmpeg.zip"
+    FFMPEG_SHA256="c56f4e2b2ce26a61becf890d8da3415347a1d7d4418cb514915f21612358b790"
+    ;;
+  x86_64)
+    FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1766437297_8.0.1/ffmpeg.zip"
+    FFMPEG_SHA256="a6c41c69e829697e408308f1ecd6acdfd0d0a84973ff3a6bf782beba83885ed6"
+    ;;
+  *)
+    echo "Unsupported macOS architecture for bundled FFmpeg: $PYTHON_ARCH"
+    exit 1
+    ;;
+esac
 
 curl -fSL -o ffmpeg.zip "$FFMPEG_URL"
 echo "$FFMPEG_SHA256  ffmpeg.zip" | shasum -a 256 -c -

@@ -1,8 +1,8 @@
-$ErrorActionPreference = "Stop"
-
 param (
     [string]$TargetRoot = "src-tauri/target"
 )
+
+$ErrorActionPreference = "Stop"
 
 # Verifies NSIS installer is present, optionally signed, and can install silently.
 

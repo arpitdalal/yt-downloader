@@ -52,7 +52,7 @@ fi
 
 echo "Using bundled Python: $("$PYTHON_DIR/bin/python3" --version 2>&1)"
 "$PYTHON_DIR/bin/python3" -m pip install --upgrade pip
-"$PYTHON_DIR/bin/pip" install -r python/requirements.txt
+"$PYTHON_DIR/bin/python3" -m pip install -r python/requirements.txt
 
 cp python/downloader.py "$PYTHON_DIR/downloader.py"
 
