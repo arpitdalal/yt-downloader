@@ -31,14 +31,57 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      - name: Validate macOS signing/notarization secrets
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_CONTENT; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Refusing to build unsigned/unnotarized macOS release artifacts."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Prepare Apple notarization API key file
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
 
       - name: Bundle dependencies
         run: ./scripts/bundle-dependencies-macos.sh
 
       - name: Build macOS bundle
-        run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg --no-sign --ci
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg --ci
+
+      - name: Verify macOS bundle trust
+        env:
+          REQUIRE_DEVELOPER_ID_SIGNATURE: "true"
+          REQUIRE_NOTARIZATION: "true"
+        run: ./scripts/verify-release-macos.sh
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -77,7 +120,13 @@ jobs:
 
       - name: Build Windows bundle
         shell: pwsh
-        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --no-sign --ci
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --ci
+
+      - name: Verify Windows installer
+        shell: pwsh
+        env:
+          REQUIRE_WINDOWS_SIGNATURE: ${{ vars.REQUIRE_WINDOWS_SIGNATURE }}
+        run: ./scripts/verify-release-windows.ps1
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -122,7 +171,10 @@ jobs:
         run: ./scripts/bundle-dependencies-linux.sh
 
       - name: Build Linux bundles
-        run: pnpm tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb,rpm --no-sign --ci
+        run: pnpm tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb,rpm --ci
+
+      - name: Verify Linux artifacts
+        run: ./scripts/verify-release-linux.sh
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4

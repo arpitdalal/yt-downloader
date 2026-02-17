@@ -66,6 +66,8 @@ pnpm tauri:build:win
 pnpm tauri:build:linux
 ```
 
+For downloadable macOS releases, use Developer ID signing + notarization. Unsigned/unnotarized DMGs are blocked by Gatekeeper.
+
 ## YouTube Auth / Quality
 
 - App uses yt-dlp’s `--cookies-from-browser` at extract/download time (no cookie file sync).
