@@ -58,7 +58,17 @@ After `pnpm install`, lefthook installs git hooks; pre-commit formats staged fil
 ## 5. CI workflows
 
 - `tauri-gate.yml`: all-OS gate (macOS, Windows, Linux) with `tauri build --debug --no-bundle`
-- `tauri-release.yml`: release bundles on `v*` tags
+- `tauri-release.yml`: release bundles on `v*` tags with artifact verification on each OS
+- macOS release is enforced as signed + notarized. Required GitHub secrets:
+  - `APPLE_CERTIFICATE` (base64 `.p12`)
+  - `APPLE_CERTIFICATE_PASSWORD`
+  - `APPLE_API_KEY` (key id)
+  - `APPLE_API_ISSUER` (issuer id)
+  - `APPLE_API_KEY_CONTENT` (raw `.p8` contents)
+- Verification scripts used by release workflow:
+  - `scripts/verify-release-macos.sh`
+  - `scripts/verify-release-windows.ps1`
+  - `scripts/verify-release-linux.sh`
 
 ## 6. Notes
 
