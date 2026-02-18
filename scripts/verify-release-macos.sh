@@ -31,7 +31,7 @@ if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
   if [[ -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
     MOUNT_DIR="$(mktemp -d /tmp/ytdmg.XXXXXX)"
     hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
-    APP_PATH="$(find "$MOUNT_DIR" -maxdepth 2 -type d -name "*.app" -print | sort | head -n 1 || true)"
+    APP_PATH="$(find "$MOUNT_DIR" -maxdepth 2 -type d -name "*.app" -print | sort | tail -n 1 || true)"
   fi
 fi
 
@@ -63,7 +63,11 @@ spctl --assess --type exec --verbose=4 "$APP_PATH"
 
 if [[ "$REQUIRE_NOTARIZATION" == "true" ]]; then
   echo "Verifying notarization ticket (stapler)"
-  xcrun stapler validate "$APP_PATH"
+  if [[ -n "$MOUNT_DIR" && -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
+    xcrun stapler validate "$DMG_PATH"
+  else
+    xcrun stapler validate "$APP_PATH"
+  fi
 fi
 
 echo "macOS release verification passed."

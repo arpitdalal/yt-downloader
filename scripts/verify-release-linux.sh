@@ -4,6 +4,14 @@ set -euo pipefail
 # Verifies Linux release artifacts produced by Tauri.
 
 TARGET_ROOT="${1:-src-tauri/target}"
+EXTRACT_DIR=""
+
+cleanup() {
+  if [[ -n "$EXTRACT_DIR" && -d "$EXTRACT_DIR" ]]; then
+    rm -rf "$EXTRACT_DIR"
+  fi
+}
+trap cleanup EXIT
 
 find_latest_file() {
   local pattern="$1"
@@ -44,10 +52,8 @@ if ! (
   [[ -x "squashfs-root/AppRun" ]]
 ); then
   echo "ERROR: AppImage extraction failed or AppRun is missing"
-  rm -rf "$EXTRACT_DIR"
   exit 1
 fi
-rm -rf "$EXTRACT_DIR"
 
 echo "Verifying deb package metadata: $DEB"
 if ! command -v dpkg-deb >/dev/null 2>&1; then
@@ -55,7 +61,7 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
   exit 1
 fi
 dpkg-deb --info "$DEB" >/dev/null
-if ! dpkg-deb --contents "$DEB" | grep -qE '\.*/usr/bin/|\.*/usr/lib/|\.*/opt/'; then
+if ! dpkg-deb --contents "$DEB" | grep -qE '\.?/usr/bin/|\.?/usr/lib/|\.?/opt/'; then
   echo "ERROR: deb package does not contain expected install paths"
   exit 1
 fi

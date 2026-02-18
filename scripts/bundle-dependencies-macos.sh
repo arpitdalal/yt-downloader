@@ -7,6 +7,13 @@ RESOURCES_ROOT="src-tauri/resources"
 PYTHON_DIR="$RESOURCES_ROOT/python"
 FFMPEG_DIR="$RESOURCES_ROOT/ffmpeg"
 
+is_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1 | true | yes | y | on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 printf '%s\n' "Bundling dependencies for macOS (Tauri resources)..."
 
 rm -rf "$PYTHON_DIR" "$FFMPEG_DIR"
@@ -54,15 +61,13 @@ PYTHON_STDLIB_TAG="$("$PYTHON_DIR/bin/python3" -c 'import sys; print("python%d.%
 PYTHON_STDLIB_DIR="$PYTHON_DIR/lib/$PYTHON_STDLIB_TAG"
 for candidate in \
   "$PYTHON_STDLIB_DIR/tkinter" \
-  "$PYTHON_STDLIB_DIR/idlelib" \
-  "$PYTHON_DIR/lib/tcl9.0" \
-  "$PYTHON_DIR/lib/tk9.0" \
-  "$PYTHON_DIR/lib/itcl4.3.5"; do
+  "$PYTHON_STDLIB_DIR/idlelib"; do
   if [[ -e "$candidate" ]]; then
     rm -rf "$candidate"
   fi
 done
 
+find "$PYTHON_DIR/lib" -maxdepth 1 -type d \( -name "tcl[0-9]*" -o -name "tk[0-9]*" -o -name "itcl*" \) -exec rm -rf {} +
 find "$PYTHON_DIR/lib" -type f \( -name "_tkinter*.so" -o -name "libtcl*.dylib" -o -name "libtk*.dylib" \) -delete
 
 echo "OK: Python bundled at $PYTHON_DIR"
@@ -108,7 +113,7 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
   done < <(find "$PYTHON_DIR" "$FFMPEG_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
   echo "OK: bundled runtime binaries signed"
 else
-  if [[ "$REQUIRE_SIGNED_BUNDLED_RUNTIMES" == "true" ]]; then
+  if is_truthy "$REQUIRE_SIGNED_BUNDLED_RUNTIMES"; then
     echo "ERROR: no Developer ID identity found; refusing unsigned bundled runtime binaries."
     exit 1
   fi
