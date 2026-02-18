@@ -91,6 +91,10 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
   done < <(find "$PYTHON_DIR" "$FFMPEG_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
   echo "OK: bundled runtime binaries signed"
 else
+  if [[ -n "${CI:-}" ]]; then
+    echo "ERROR: no Developer ID identity found; refusing unsigned bundled runtime binaries in CI."
+    exit 1
+  fi
   echo "WARNING: no Developer ID identity found; bundled runtime binaries left unsigned"
 fi
 
