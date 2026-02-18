@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      include_linux_rpm:
+        description: "Build Linux RPM artifact (adds substantial runtime)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -214,10 +220,44 @@ jobs:
       - name: Bundle dependencies
         run: ./scripts/bundle-dependencies-linux.sh
 
+      - name: Decide Linux bundle targets
+        env:
+          INCLUDE_LINUX_RPM: ${{ github.event.inputs.include_linux_rpm || 'false' }}
+          TAG_INCLUDE_LINUX_RPM: ${{ vars.RELEASE_INCLUDE_LINUX_RPM || 'false' }}
+        run: |
+          set -euo pipefail
+          linux_bundles="appimage,deb"
+          require_rpm="false"
+
+          # Allow manual workflow_dispatch runs to opt into RPM.
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${INCLUDE_LINUX_RPM}" == "true" ]]; then
+            linux_bundles="appimage,deb,rpm"
+            require_rpm="true"
+          # Tag releases stay fast by default; enable RPM via repo variable if needed.
+          elif [[ "${GITHUB_REF}" == refs/tags/v* && "${TAG_INCLUDE_LINUX_RPM}" == "true" ]]; then
+            linux_bundles="appimage,deb,rpm"
+            require_rpm="true"
+          fi
+
+          echo "LINUX_BUNDLES=${linux_bundles}" >> "$GITHUB_ENV"
+          echo "REQUIRE_RPM=${require_rpm}" >> "$GITHUB_ENV"
+          echo "Selected Linux bundles: ${linux_bundles}"
+
+      - name: Configure faster rpmbuild macros
+        if: env.REQUIRE_RPM == 'true'
+        run: |
+          set -euo pipefail
+          cat > ~/.rpmmacros <<'EOF'
+          %debug_package %{nil}
+          %_build_id_links none
+          %_binary_payload w3.zstdio
+          %_source_payload w3.zstdio
+          EOF
+
       - name: Build Linux bundles
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: pnpm tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb,rpm --ci --verbose
+        run: pnpm tauri build --target x86_64-unknown-linux-gnu --bundles "${LINUX_BUNDLES}" --ci --verbose
 
       - name: Verify Linux artifacts
         run: ./scripts/verify-release-linux.sh

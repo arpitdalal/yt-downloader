@@ -66,11 +66,9 @@ spctl --assess --type exec --verbose=4 "$APP_PATH"
 
 if [[ "$REQUIRE_NOTARIZATION" == "true" ]]; then
   echo "Verifying notarization ticket (stapler)"
-  if [[ -n "$MOUNT_DIR" && -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
-    xcrun stapler validate "$DMG_PATH"
-  else
-    xcrun stapler validate "$APP_PATH"
-  fi
+  # Tauri notarizes/staples the app bundle before DMG creation.
+  # Validate the app ticket from the resolved bundle path.
+  xcrun stapler validate "$APP_PATH"
 fi
 
 echo "macOS release verification passed."
