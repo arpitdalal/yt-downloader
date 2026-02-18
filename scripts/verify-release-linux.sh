@@ -55,7 +55,7 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
   exit 1
 fi
 dpkg-deb --info "$DEB" >/dev/null
-if ! dpkg-deb --contents "$DEB" | grep -qE '\.*/usr/bin/|\.*/opt/'; then
+if ! dpkg-deb --contents "$DEB" | grep -qE '\.*/usr/bin/|\.*/usr/lib/|\.*/opt/'; then
   echo "ERROR: deb package does not contain expected install paths"
   exit 1
 fi
@@ -66,7 +66,7 @@ if ! command -v rpm >/dev/null 2>&1; then
   exit 1
 fi
 rpm -qpi "$RPM" >/dev/null
-if ! rpm -qpl "$RPM" | grep -qE '/usr/bin/|/opt/'; then
+if ! rpm -qpl "$RPM" | grep -qE '/usr/bin/|/usr/lib/|/opt/'; then
   echo "ERROR: rpm package does not contain expected install paths"
   exit 1
 fi
