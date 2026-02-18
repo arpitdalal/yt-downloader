@@ -7,6 +7,7 @@ TARGET_ROOT="${1:-src-tauri/target}"
 EXTRACT_DIR=""
 DEB_CONTENTS_FILE=""
 RPM_CONTENTS_FILE=""
+PACKAGE_PATH_REGEX='(^|[[:space:]])(\.?/)?(usr/bin/|usr/lib/|opt/)'
 
 cleanup() {
   if [[ -n "$EXTRACT_DIR" && -d "$EXTRACT_DIR" ]]; then
@@ -72,7 +73,7 @@ fi
 dpkg-deb --info "$DEB" >/dev/null
 DEB_CONTENTS_FILE="$(mktemp)"
 dpkg-deb --contents "$DEB" >"$DEB_CONTENTS_FILE"
-if ! grep -qE '\.?/usr/bin/|\.?/usr/lib/|\.?/opt/' "$DEB_CONTENTS_FILE"; then
+if ! grep -qE "$PACKAGE_PATH_REGEX" "$DEB_CONTENTS_FILE"; then
   echo "ERROR: deb package does not contain expected install paths"
   echo "First 200 deb entries for debugging:"
   sed -n '1,200p' "$DEB_CONTENTS_FILE"
@@ -87,7 +88,7 @@ fi
 rpm -qpi "$RPM" >/dev/null
 RPM_CONTENTS_FILE="$(mktemp)"
 rpm -qpl "$RPM" >"$RPM_CONTENTS_FILE"
-if ! grep -qE '/usr/bin/|/usr/lib/|/opt/' "$RPM_CONTENTS_FILE"; then
+if ! grep -qE "$PACKAGE_PATH_REGEX" "$RPM_CONTENTS_FILE"; then
   echo "ERROR: rpm package does not contain expected install paths"
   echo "First 200 rpm entries for debugging:"
   sed -n '1,200p' "$RPM_CONTENTS_FILE"
