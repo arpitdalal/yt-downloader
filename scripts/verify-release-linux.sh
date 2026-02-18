@@ -5,10 +5,18 @@ set -euo pipefail
 
 TARGET_ROOT="${1:-src-tauri/target}"
 EXTRACT_DIR=""
+DEB_CONTENTS_FILE=""
+RPM_CONTENTS_FILE=""
 
 cleanup() {
   if [[ -n "$EXTRACT_DIR" && -d "$EXTRACT_DIR" ]]; then
     rm -rf "$EXTRACT_DIR"
+  fi
+  if [[ -n "$DEB_CONTENTS_FILE" && -f "$DEB_CONTENTS_FILE" ]]; then
+    rm -f "$DEB_CONTENTS_FILE"
+  fi
+  if [[ -n "$RPM_CONTENTS_FILE" && -f "$RPM_CONTENTS_FILE" ]]; then
+    rm -f "$RPM_CONTENTS_FILE"
   fi
 }
 trap cleanup EXIT
@@ -62,8 +70,12 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
   exit 1
 fi
 dpkg-deb --info "$DEB" >/dev/null
-if ! dpkg-deb --contents "$DEB" | grep -qE '\.?/usr/bin/|\.?/usr/lib/|\.?/opt/'; then
+DEB_CONTENTS_FILE="$(mktemp)"
+dpkg-deb --contents "$DEB" >"$DEB_CONTENTS_FILE"
+if ! grep -qE '\.?/usr/bin/|\.?/usr/lib/|\.?/opt/' "$DEB_CONTENTS_FILE"; then
   echo "ERROR: deb package does not contain expected install paths"
+  echo "First 200 deb entries for debugging:"
+  sed -n '1,200p' "$DEB_CONTENTS_FILE"
   exit 1
 fi
 
@@ -73,8 +85,12 @@ if ! command -v rpm >/dev/null 2>&1; then
   exit 1
 fi
 rpm -qpi "$RPM" >/dev/null
-if ! rpm -qpl "$RPM" | grep -qE '/usr/bin/|/usr/lib/|/opt/'; then
+RPM_CONTENTS_FILE="$(mktemp)"
+rpm -qpl "$RPM" >"$RPM_CONTENTS_FILE"
+if ! grep -qE '/usr/bin/|/usr/lib/|/opt/' "$RPM_CONTENTS_FILE"; then
   echo "ERROR: rpm package does not contain expected install paths"
+  echo "First 200 rpm entries for debugging:"
+  sed -n '1,200p' "$RPM_CONTENTS_FILE"
   exit 1
 fi
 
