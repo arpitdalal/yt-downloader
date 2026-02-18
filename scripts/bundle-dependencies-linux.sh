@@ -56,6 +56,24 @@ echo "Using bundled Python: $("$PYTHON_DIR/bin/python3" --version 2>&1)"
 
 cp python/downloader.py "$PYTHON_DIR/downloader.py"
 
+# Remove unused GUI stdlib/extensions (Tk/IDLE) to avoid linuxdeploy
+# resolving optional Tcl/Tk runtime dependencies that are irrelevant for yt-dlp.
+PYTHON_STDLIB_TAG="$("$PYTHON_DIR/bin/python3" -c 'import sys; print("python%d.%d" % (sys.version_info.major, sys.version_info.minor))')"
+PYTHON_STDLIB_DIR="$PYTHON_DIR/lib/$PYTHON_STDLIB_TAG"
+for candidate in \
+  "$PYTHON_STDLIB_DIR/tkinter" \
+  "$PYTHON_STDLIB_DIR/idlelib"; do
+  if [[ -e "$candidate" ]]; then
+    rm -rf "$candidate"
+  fi
+done
+
+find "$PYTHON_DIR/lib" -maxdepth 1 -type d \( -name "tcl[0-9]*" -o -name "tk[0-9]*" -o -name "itcl*" \) -exec rm -rf {} +
+find "$PYTHON_DIR/lib" -type f \( -name "_tkinter*.so" -o -name "libtcl*.so*" -o -name "libtk*.so*" \) -delete
+# python-build-standalone may include broken symlinks (for example, terminfo aliases);
+# remove them so downstream packaging/tools don't fail on missing targets.
+find -L "$PYTHON_DIR" -type l -delete
+
 echo "OK: Python bundled at $PYTHON_DIR"
 
 printf '\n=== Step 2: FFmpeg ===\n'

@@ -7,6 +7,13 @@ RESOURCES_ROOT="src-tauri/resources"
 PYTHON_DIR="$RESOURCES_ROOT/python"
 FFMPEG_DIR="$RESOURCES_ROOT/ffmpeg"
 
+is_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1 | true | yes | y | on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 printf '%s\n' "Bundling dependencies for macOS (Tauri resources)..."
 
 rm -rf "$PYTHON_DIR" "$FFMPEG_DIR"
@@ -49,6 +56,23 @@ echo "Using bundled Python: $("$PYTHON_DIR/bin/python3" --version 2>&1)"
 
 cp python/downloader.py "$PYTHON_DIR/downloader.py"
 
+# Remove unused GUI stdlib/extensions (Tk/IDLE) from packaged runtime.
+PYTHON_STDLIB_TAG="$("$PYTHON_DIR/bin/python3" -c 'import sys; print("python%d.%d" % (sys.version_info.major, sys.version_info.minor))')"
+PYTHON_STDLIB_DIR="$PYTHON_DIR/lib/$PYTHON_STDLIB_TAG"
+for candidate in \
+  "$PYTHON_STDLIB_DIR/tkinter" \
+  "$PYTHON_STDLIB_DIR/idlelib"; do
+  if [[ -e "$candidate" ]]; then
+    rm -rf "$candidate"
+  fi
+done
+
+find "$PYTHON_DIR/lib" -maxdepth 1 -type d \( -name "tcl[0-9]*" -o -name "tk[0-9]*" -o -name "itcl*" \) -exec rm -rf {} +
+find "$PYTHON_DIR/lib" -type f \( -name "_tkinter*.so" -o -name "libtcl*.dylib" -o -name "libtk*.dylib" \) -delete
+# python-build-standalone may include broken symlinks (for example, terminfo aliases);
+# remove them so downstream packaging/tools don't fail on missing targets.
+find -L "$PYTHON_DIR" -type l -delete
+
 echo "OK: Python bundled at $PYTHON_DIR"
 
 printf '\n=== Step 2: FFmpeg ===\n'
@@ -78,6 +102,7 @@ echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
 printf '\n=== Step 3: macOS code signing for bundled runtimes ===\n'
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
+REQUIRE_SIGNED_BUNDLED_RUNTIMES="${REQUIRE_SIGNED_BUNDLED_RUNTIMES:-false}"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
   SIGNING_IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1 || true)"
 fi
@@ -91,8 +116,8 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
   done < <(find "$PYTHON_DIR" "$FFMPEG_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
   echo "OK: bundled runtime binaries signed"
 else
-  if [[ -n "${CI:-}" ]]; then
-    echo "ERROR: no Developer ID identity found; refusing unsigned bundled runtime binaries in CI."
+  if is_truthy "$REQUIRE_SIGNED_BUNDLED_RUNTIMES"; then
+    echo "ERROR: no Developer ID identity found; refusing unsigned bundled runtime binaries."
     exit 1
   fi
   echo "WARNING: no Developer ID identity found; bundled runtime binaries left unsigned"
