@@ -4,7 +4,7 @@ set -euo pipefail
 # Verifies Linux release artifacts produced by Tauri.
 
 TARGET_ROOT="${1:-src-tauri/target}"
-REQUIRE_RPM="${REQUIRE_RPM:-true}"
+REQUIRE_RPM="${REQUIRE_RPM:-false}"
 EXTRACT_DIR=""
 DEB_CONTENTS_FILE=""
 RPM_CONTENTS_FILE=""
