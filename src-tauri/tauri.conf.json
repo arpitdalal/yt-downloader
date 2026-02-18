@@ -32,17 +32,17 @@
     "linux": {
       "appimage": {
         "files": {
-          "linux/com.ytdownloader.app.metainfo.xml": "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml"
+          "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml": "linux/com.ytdownloader.app.metainfo.xml"
         }
       },
       "deb": {
         "files": {
-          "linux/com.ytdownloader.app.metainfo.xml": "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml"
+          "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml": "linux/com.ytdownloader.app.metainfo.xml"
         }
       },
       "rpm": {
         "files": {
-          "linux/com.ytdownloader.app.metainfo.xml": "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml"
+          "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml": "linux/com.ytdownloader.app.metainfo.xml"
         }
       }
     },
