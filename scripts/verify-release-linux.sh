@@ -10,6 +10,15 @@ find_latest_file() {
   find "$TARGET_ROOT" -type f -path "$pattern" -print | sort | tail -n 1
 }
 
+to_abs_path() {
+  local path="$1"
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$path"
+  else
+    readlink -f "$path"
+  fi
+}
+
 APPIMAGE="$(find_latest_file "*/bundle/appimage/*.AppImage" || true)"
 DEB="$(find_latest_file "*/bundle/deb/*.deb" || true)"
 RPM="$(find_latest_file "*/bundle/rpm/*.rpm" || true)"
@@ -21,6 +30,10 @@ if [[ -z "$APPIMAGE" || -z "$DEB" || -z "$RPM" ]]; then
   echo "rpm: ${RPM:-missing}"
   exit 1
 fi
+
+APPIMAGE="$(to_abs_path "$APPIMAGE")"
+DEB="$(to_abs_path "$DEB")"
+RPM="$(to_abs_path "$RPM")"
 
 echo "Verifying AppImage: $APPIMAGE"
 chmod +x "$APPIMAGE"
