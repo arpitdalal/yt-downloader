@@ -4,6 +4,7 @@ set -euo pipefail
 # Verifies Linux release artifacts produced by Tauri.
 
 TARGET_ROOT="${1:-src-tauri/target}"
+REQUIRE_RPM="${REQUIRE_RPM:-true}"
 EXTRACT_DIR=""
 DEB_CONTENTS_FILE=""
 RPM_CONTENTS_FILE=""
@@ -40,17 +41,27 @@ APPIMAGE="$(find_latest_file "*/bundle/appimage/*.AppImage" || true)"
 DEB="$(find_latest_file "*/bundle/deb/*.deb" || true)"
 RPM="$(find_latest_file "*/bundle/rpm/*.rpm" || true)"
 
-if [[ -z "$APPIMAGE" || -z "$DEB" || -z "$RPM" ]]; then
-  echo "ERROR: expected AppImage, deb, and rpm artifacts under $TARGET_ROOT"
+if [[ -z "$APPIMAGE" || -z "$DEB" ]]; then
+  echo "ERROR: expected AppImage and deb artifacts under $TARGET_ROOT"
   echo "AppImage: ${APPIMAGE:-missing}"
   echo "deb: ${DEB:-missing}"
-  echo "rpm: ${RPM:-missing}"
+  if [[ "$REQUIRE_RPM" == "true" ]]; then
+    echo "rpm: ${RPM:-missing}"
+  fi
+  exit 1
+fi
+
+if [[ "$REQUIRE_RPM" == "true" && -z "$RPM" ]]; then
+  echo "ERROR: expected rpm artifact under $TARGET_ROOT"
+  echo "rpm: missing"
   exit 1
 fi
 
 APPIMAGE="$(to_abs_path "$APPIMAGE")"
 DEB="$(to_abs_path "$DEB")"
-RPM="$(to_abs_path "$RPM")"
+if [[ -n "$RPM" ]]; then
+  RPM="$(to_abs_path "$RPM")"
+fi
 
 echo "Verifying AppImage: $APPIMAGE"
 chmod +x "$APPIMAGE"
@@ -80,19 +91,23 @@ if ! grep -qE "$PACKAGE_PATH_REGEX" "$DEB_CONTENTS_FILE"; then
   exit 1
 fi
 
-echo "Verifying rpm package metadata: $RPM"
-if ! command -v rpm >/dev/null 2>&1; then
-  echo "ERROR: rpm is required but not found; install package 'rpm'."
-  exit 1
-fi
-rpm -qpi "$RPM" >/dev/null
-RPM_CONTENTS_FILE="$(mktemp)"
-rpm -qpl "$RPM" >"$RPM_CONTENTS_FILE"
-if ! grep -qE "$PACKAGE_PATH_REGEX" "$RPM_CONTENTS_FILE"; then
-  echo "ERROR: rpm package does not contain expected install paths"
-  echo "First 200 rpm entries for debugging:"
-  sed -n '1,200p' "$RPM_CONTENTS_FILE"
-  exit 1
+if [[ "$REQUIRE_RPM" == "true" ]]; then
+  echo "Verifying rpm package metadata: $RPM"
+  if ! command -v rpm >/dev/null 2>&1; then
+    echo "ERROR: rpm is required but not found; install package 'rpm'."
+    exit 1
+  fi
+  rpm -qpi "$RPM" >/dev/null
+  RPM_CONTENTS_FILE="$(mktemp)"
+  rpm -qpl "$RPM" >"$RPM_CONTENTS_FILE"
+  if ! grep -qE "$PACKAGE_PATH_REGEX" "$RPM_CONTENTS_FILE"; then
+    echo "ERROR: rpm package does not contain expected install paths"
+    echo "First 200 rpm entries for debugging:"
+    sed -n '1,200p' "$RPM_CONTENTS_FILE"
+    exit 1
+  fi
+else
+  echo "Skipping rpm verification (REQUIRE_RPM=$REQUIRE_RPM)."
 fi
 
 echo "Linux release verification passed."
