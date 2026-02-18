@@ -70,6 +70,9 @@ done
 
 find "$PYTHON_DIR/lib" -maxdepth 1 -type d \( -name "tcl[0-9]*" -o -name "tk[0-9]*" -o -name "itcl*" \) -exec rm -rf {} +
 find "$PYTHON_DIR/lib" -type f \( -name "_tkinter*.so" -o -name "libtcl*.so*" -o -name "libtk*.so*" \) -delete
+# python-build-standalone may include broken symlinks (for example, terminfo aliases);
+# remove them so downstream packaging/tools don't fail on missing targets.
+find -L "$PYTHON_DIR" -type l -delete
 
 echo "OK: Python bundled at $PYTHON_DIR"
 
