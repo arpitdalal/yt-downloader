@@ -30,8 +30,11 @@ if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
 
   if [[ -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
     MOUNT_DIR="$(mktemp -d /tmp/ytdmg.XXXXXX)"
-    hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
-    APP_PATH="$(find "$MOUNT_DIR" -maxdepth 2 -type d -name "*.app" -print | sort | tail -n 1 || true)"
+    if hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null 2>&1; then
+      APP_PATH="$(find "$MOUNT_DIR" -maxdepth 2 -type d -name "*.app" -print | sort | tail -n 1 || true)"
+    else
+      echo "WARNING: failed to mount DMG: $DMG_PATH"
+    fi
   fi
 fi
 

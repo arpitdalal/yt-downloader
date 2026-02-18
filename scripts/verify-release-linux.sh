@@ -50,8 +50,9 @@ if ! (
   cd "$EXTRACT_DIR"
   "$APPIMAGE" --appimage-extract >/dev/null
   [[ -x "squashfs-root/AppRun" ]]
+  [[ -f "squashfs-root/usr/share/metainfo/com.ytdownloader.app.metainfo.xml" ]]
 ); then
-  echo "ERROR: AppImage extraction failed or AppRun is missing"
+  echo "ERROR: AppImage extraction failed, AppRun is missing, or metainfo XML is missing"
   exit 1
 fi
 
