@@ -260,8 +260,6 @@ jobs:
         run: pnpm tauri build --target x86_64-unknown-linux-gnu --bundles "${LINUX_BUNDLES}" --ci --verbose
 
       - name: Verify Linux artifacts
-        env:
-          REQUIRE_RPM: ${{ env.REQUIRE_RPM }}
         run: ./scripts/verify-release-linux.sh
 
       - name: Upload Linux artifacts
