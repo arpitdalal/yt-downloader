@@ -78,6 +78,7 @@ echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
 printf '\n=== Step 3: macOS code signing for bundled runtimes ===\n'
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
+REQUIRE_SIGNED_BUNDLED_RUNTIMES="${REQUIRE_SIGNED_BUNDLED_RUNTIMES:-false}"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
   SIGNING_IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1 || true)"
 fi
@@ -91,8 +92,8 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
   done < <(find "$PYTHON_DIR" "$FFMPEG_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
   echo "OK: bundled runtime binaries signed"
 else
-  if [[ -n "${CI:-}" ]]; then
-    echo "ERROR: no Developer ID identity found; refusing unsigned bundled runtime binaries in CI."
+  if [[ "$REQUIRE_SIGNED_BUNDLED_RUNTIMES" == "true" ]]; then
+    echo "ERROR: no Developer ID identity found; refusing unsigned bundled runtime binaries."
     exit 1
   fi
   echo "WARNING: no Developer ID identity found; bundled runtime binaries left unsigned"

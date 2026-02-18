@@ -26,6 +26,26 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "nsis", "appimage", "deb", "rpm"],
+    "category": "Utility",
+    "shortDescription": "Download videos and audio from supported platforms.",
+    "longDescription": "YouTube Downloader is a desktop utility to fetch video and audio streams using a bundled Python runtime and FFmpeg, without requiring system Python or FFmpeg installs.",
+    "linux": {
+      "appimage": {
+        "files": {
+          "linux/com.ytdownloader.app.metainfo.xml": "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml"
+        }
+      },
+      "deb": {
+        "files": {
+          "linux/com.ytdownloader.app.metainfo.xml": "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml"
+        }
+      },
+      "rpm": {
+        "files": {
+          "linux/com.ytdownloader.app.metainfo.xml": "/usr/share/metainfo/com.ytdownloader.app.metainfo.xml"
+        }
+      }
+    },
     "resources": {
       "resources/python": "python",
       "resources/ffmpeg": "ffmpeg"

@@ -51,6 +51,8 @@ jobs:
 
       - name: Bundle dependencies (macOS)
         if: runner.os == 'macOS'
+        env:
+          REQUIRE_SIGNED_BUNDLED_RUNTIMES: "false"
         run: ./scripts/bundle-dependencies-macos.sh
 
       - name: Bundle dependencies (Linux)

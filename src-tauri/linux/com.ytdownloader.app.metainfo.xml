@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.ytdownloader.app</id>
+  <name>YouTube Downloader</name>
+  <summary>Download video and audio with bundled runtime dependencies</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>Arpit Dalal</developer_name>
+  <launchable type="desktop-id">YouTube Downloader.desktop</launchable>
+  <description>
+    <p>
+      YouTube Downloader is a desktop app for downloading video and audio streams
+      with a bundled Python runtime and FFmpeg.
+    </p>
+    <p>
+      It runs fully offline after install, and does not require system Python or
+      system FFmpeg packages.
+    </p>
+  </description>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Utility</category>
+    <category>Network</category>
+  </categories>
+  <url type="homepage">https://github.com/arpitdalal/yt-downloader</url>
+  <releases>
+    <release version="2.0.0" date="2026-02-17"/>
+  </releases>
+</component>

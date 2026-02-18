@@ -6,15 +6,39 @@ set -euo pipefail
 
 TARGET_ROOT="${1:-src-tauri/target}"
 APP_PATH="${APP_PATH:-}"
+DMG_PATH="${DMG_PATH:-}"
 REQUIRE_DEVELOPER_ID_SIGNATURE="${REQUIRE_DEVELOPER_ID_SIGNATURE:-true}"
 REQUIRE_NOTARIZATION="${REQUIRE_NOTARIZATION:-true}"
+MOUNT_DIR=""
+
+cleanup() {
+  if [[ -n "$MOUNT_DIR" && -d "$MOUNT_DIR" ]]; then
+    hdiutil detach "$MOUNT_DIR" -force >/dev/null 2>&1 || true
+    rmdir "$MOUNT_DIR" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
 
 if [[ -z "$APP_PATH" ]]; then
   APP_PATH="$(find "$TARGET_ROOT" -type d -path "*/bundle/macos/*.app" -print | sort | tail -n 1 || true)"
 fi
 
 if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
+  if [[ -z "$DMG_PATH" ]]; then
+    DMG_PATH="$(find "$TARGET_ROOT" -type f -path "*/bundle/dmg/*.dmg" -print | sort | tail -n 1 || true)"
+  fi
+
+  if [[ -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
+    MOUNT_DIR="$(mktemp -d /tmp/ytdmg.XXXXXX)"
+    hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
+    APP_PATH="$(find "$MOUNT_DIR" -maxdepth 2 -type d -name "*.app" -print | sort | head -n 1 || true)"
+  fi
+fi
+
+if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
   echo "ERROR: macOS app bundle not found under $TARGET_ROOT"
+  echo "App path checked: ${APP_PATH:-missing}"
+  echo "DMG path checked: ${DMG_PATH:-missing}"
   exit 1
 fi
 
