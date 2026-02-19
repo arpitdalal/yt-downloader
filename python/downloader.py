@@ -543,8 +543,6 @@ class YouTubeDownloader:
                     audio_codec = codec_name
                 if video_codec is not None and audio_codec is not None:
                     break
-
-            return (video_codec, audio_codec)
         except (
             OSError,
             subprocess.SubprocessError,
@@ -553,6 +551,8 @@ class YouTubeDownloader:
             TypeError,
         ):
             return (None, None)
+        else:
+            return (video_codec, audio_codec)
 
     def _cleanup_incomplete_download_files(self, temp_dir: Path, cache_video_id: str) -> None:
         """Delete stale partial files before retrying with another selector."""
@@ -1739,6 +1739,9 @@ class YouTubeDownloader:
                 )
 
         final_path_obj = Path(final_file_path)
+        # When needs_cut=True, transcode_input and final_path_obj are the same
+        # cut output path. _transcode_to_quicktime_mp4 handles same src/dst by
+        # writing a .qtcompat temp file, then replacing final_path_obj.
         transcode_input = final_path_obj if needs_cut else original_file_path
         source_video_codec = None
         source_audio_codec = None
