@@ -4,6 +4,7 @@ interface Props {
   release: ReleaseData;
 }
 const { release } = Astro.props;
+const hasAnyAsset = Object.values(release.assets).some(Boolean);
 
 function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -20,6 +21,18 @@ function formatBytes(n: number) {
     Version {release.version} · <a class="text-[var(--color-accent)] hover:underline" href={`https://github.com/arpitdalal/yt-downloader/releases/tag/${release.tag}`}>Release notes</a>
   </p>
   <ul class="mt-8 space-y-3">
+    {!hasAnyAsset && (
+      <li
+        class="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 text-[var(--color-muted)]"
+        role="status"
+        aria-live="polite"
+      >
+        <p class="font-medium text-[#fafafa]">No downloads available for this release</p>
+        <p class="mt-1 text-sm">
+          Check <a class="text-[var(--color-accent)] hover:underline" href={`https://github.com/arpitdalal/yt-downloader/releases/tag/${release.tag}`}>GitHub Releases</a> for assets or try again later.
+        </p>
+      </li>
+    )}
     {release.assets.macosAppleSilicon && (
       <li>
         <a
