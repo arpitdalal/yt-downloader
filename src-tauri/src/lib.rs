@@ -328,7 +328,7 @@ fn run_download_video(
         script_path.to_string_lossy().to_string(),
         validated_url.clone(),
         "false".to_string(),
-        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best".to_string(),
+        "bestvideo*+bestaudio".to_string(),
         sections_json,
         validated.save_path.to_string_lossy().to_string(),
     ];
@@ -794,6 +794,13 @@ fn validate_python_path_for_mode(python_path: &Path) -> Result<(), String> {
             python_path.to_string_lossy()
         ));
     }
+    if !python_executable_works(python_path) {
+        return Err(format!(
+            "Configuration error: Python executable is not runnable at: {}. \
+The bundled runtime likely does not match this OS/architecture.",
+            python_path.to_string_lossy()
+        ));
+    }
     Ok(())
 }
 
@@ -878,7 +885,7 @@ fn resolve_dev_python_path() -> Option<PathBuf> {
             .join("bin")
             .join("python3")
     };
-    if bundled_python.exists() {
+    if bundled_python.exists() && python_executable_works(&bundled_python) {
         return Some(bundled_python);
     }
 
@@ -939,6 +946,17 @@ fn command_available(command: &str) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok()
+}
+
+fn python_executable_works(path: &Path) -> bool {
+    Command::new(path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn is_dev_mode() -> bool {

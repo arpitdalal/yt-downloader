@@ -29,7 +29,7 @@ MAX_RETRY_DELAY = 3.0
 RETRY_BACKOFF_MULTIPLIER = 1.5
 INCOMPLETE_FILE_EXTENSIONS = (".part", ".ytdl")
 VIDEO_EXTENSIONS = ["mp4", "webm", "mkv", "m4a", "flv", "avi", "mov"]
-CACHE_KEY_VERSION = "hqv2"
+CACHE_KEY_VERSION = "hqv3"
 SUPPORTED_COOKIE_BROWSERS = {
     "brave",
     "chrome",
@@ -240,10 +240,10 @@ class YouTubeDownloader:
 
     @staticmethod
     def _build_format_selectors(quality: str) -> list[str]:
-        """Build selectors that prioritize broadly compatible MP4 outputs."""
+        """Build selectors that prioritize H.264/AAC MP4 compatibility."""
         requested_quality = quality.strip() if quality else ""
-        # Generic HQ selectors often choose AV1/WebM and force slow post-transcode.
-        # Default to MP4-first selectors unless caller requested a specific constrained format.
+        # Generic HQ selectors often choose AV1/VP9 and force expensive post-transcode.
+        # Normalize these to compatibility-first defaults.
         if requested_quality in {
             "bestvideo*+bestaudio",
             "bv*+ba",
@@ -254,10 +254,14 @@ class YouTubeDownloader:
 
         candidates = [
             requested_quality,
-            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]",
-            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[acodec!=none]",
-            "best[ext=mp4][vcodec!=none][acodec!=none]",
-            "best[ext=mp4]/best",
+            "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]"
+            "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=mp4a]"
+            "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=aac]"
+            "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=aac]",
+            "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+            "/best[ext=mp4][vcodec^=h264][acodec^=mp4a]"
+            "/best[ext=mp4][vcodec^=avc1][acodec^=aac]"
+            "/best[ext=mp4][vcodec^=h264][acodec^=aac]",
         ]
         selectors: list[str] = []
         for selector in candidates:
@@ -267,11 +271,12 @@ class YouTubeDownloader:
 
     @staticmethod
     def _build_restricted_format_selectors() -> list[str]:
-        """Fallback selectors for restricted videos where HQ streams return 403."""
+        """Fallback selectors for restricted videos while staying H.264/AAC MP4."""
         return [
-            "best[ext=mp4][vcodec!=none][acodec!=none]",
-            "best[vcodec!=none][acodec!=none]",
-            "best[ext=mp4]/best",
+            "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+            "/best[ext=mp4][vcodec^=h264][acodec^=mp4a]"
+            "/best[ext=mp4][vcodec^=avc1][acodec^=aac]"
+            "/best[ext=mp4][vcodec^=h264][acodec^=aac]",
         ]
 
     @staticmethod
@@ -1760,7 +1765,8 @@ class YouTubeDownloader:
                 },
             )
 
-        requires_mp4_compat = self._requires_mp4_compatibility_transcode(
+        enable_mp4_compat_transcode = self._is_truthy_env("YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE", default=False)
+        requires_mp4_compat = enable_mp4_compat_transcode and self._requires_mp4_compatibility_transcode(
             transcode_input,
             final_path_obj,
             progress_tracker.selected_format,
@@ -1791,6 +1797,15 @@ class YouTubeDownloader:
                     ),
                     video_info=video_info,
                 )
+        elif not enable_mp4_compat_transcode:
+            self._emit_debug_event(
+                "quality_debug",
+                {
+                    "event": "mp4_compat_transcode_disabled",
+                    "input_path": str(transcode_input),
+                    "output_path": str(final_path_obj),
+                },
+            )
 
         # Verify the cached file still exists in temp directory
         cached_file_path_str = None
