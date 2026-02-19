@@ -828,6 +828,8 @@ class YouTubeDownloader:
         normalized = str(codec or "").strip().lower()
         if normalized in ("", "none"):
             return True
+        if normalized.startswith("mp4a."):
+            return True
         return normalized in ("aac", "mp3", "ac3", "eac3", "alac")
 
     @staticmethod

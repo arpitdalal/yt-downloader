@@ -2436,6 +2436,19 @@ class TestDownloadVideo:
             is True
         )
 
+    def test_requires_mp4_compatibility_transcode_allows_mp4a_audio_codec_probe(self):
+        """mp4a.* audio variants should be treated as QuickTime-compatible."""
+        assert (
+            YouTubeDownloader._requires_mp4_compatibility_transcode(
+                Path("source.mp4"),
+                Path("output.mp4"),
+                None,
+                source_video_codec="h264",
+                source_audio_codec="mp4a.40.2",
+            )
+            is False
+        )
+
     def test_download_transcodes_non_mp4_source_for_mp4_output(self, temp_dir, sample_video_info):
         """When source is webm and output is mp4, downloader should run compatibility transcode."""
         output_file = temp_dir / "output.mp4"
