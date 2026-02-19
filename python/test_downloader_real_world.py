@@ -28,8 +28,8 @@ APP_QUALITY_STRING = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 FULL_DOWNLOAD_SECTIONS_JSON = json.dumps([{"start": None, "end": None}])
 
 DEFAULT_REAL_WORLD_URLS = [
-    "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-    "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "https://www.youtube.com/watch?v=MzzHahyOD-U",
+    "https://www.youtube.com/watch?v=aZ5L9mDeMaw",
 ]
 
 
@@ -64,6 +64,50 @@ def _parse_last_json_object(text: str) -> dict | None:
         except json.JSONDecodeError:
             continue
     return None
+
+
+def _parse_json_lines(text: str) -> list[dict]:
+    """Parse JSON objects emitted as one-object-per-line (stderr debug stream)."""
+    payloads: list[dict] = []
+    for line in text.splitlines():
+        candidate = line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            payloads.append(parsed)
+    return payloads
+
+
+def _extract_format_capabilities(stderr_text: str) -> tuple[int | None, int | None]:
+    """Return max adaptive/progressive heights from quality_debug telemetry."""
+    for event in _parse_json_lines(stderr_text):
+        if event.get("type") != "quality_debug" or event.get("event") != "format_capabilities":
+            continue
+        adaptive = event.get("max_adaptive_height")
+        progressive = event.get("max_progressive_height")
+        adaptive_height = adaptive if isinstance(adaptive, int) and adaptive > 0 else None
+        progressive_height = progressive if isinstance(progressive, int) and progressive > 0 else None
+        return adaptive_height, progressive_height
+    return None, None
+
+
+def _minimum_expected_bitrate_bps(max_height: int | None) -> int:
+    """Conservative floor to catch truncated downloads without brittle fixed file-size checks."""
+    if not isinstance(max_height, int) or max_height <= 0:
+        return 40_000
+    if max_height <= 240:
+        return 40_000
+    if max_height <= 360:
+        return 60_000
+    if max_height <= 480:
+        return 90_000
+    if max_height <= 720:
+        return 140_000
+    return 200_000
 
 
 def _run_ffmpeg_integrity_check(file_path: Path, ffmpeg_path: str) -> None:
@@ -147,7 +191,28 @@ def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
     assert file_path, f"payload missing 'file_path': {payload}"
     out_file = Path(file_path)
     assert out_file.exists(), f"output file not found: {out_file}"
-    assert out_file.stat().st_size > 1_000_000, "expected >1MB for a real download"
+    file_size = out_file.stat().st_size
+    assert file_size > 0, "expected non-empty download output"
+
+    reported_size = payload.get("file_size")
+    if isinstance(reported_size, int):
+        assert reported_size == file_size, "payload file_size should match filesystem size"
+
+    video_info = payload.get("video_info") if isinstance(payload.get("video_info"), dict) else {}
+    duration = video_info.get("duration")
+    max_adaptive_height, max_progressive_height = _extract_format_capabilities(process.stderr)
+    max_available_height = max_adaptive_height or max_progressive_height
+
+    if isinstance(duration, (int, float)) and duration > 0:
+        min_bitrate_bps = _minimum_expected_bitrate_bps(max_available_height)
+        expected_min_size = max(50_000, int((duration * min_bitrate_bps) / 8))
+        assert file_size >= expected_min_size, (
+            "download output is unexpectedly small for reported duration/available formats: "
+            f"duration={duration}s, max_height={max_available_height}, file_size={file_size}B, "
+            f"expected_min={expected_min_size}B"
+        )
+    else:
+        assert file_size >= 50_000, "expected at least 50KB when duration metadata is unavailable"
 
     ffmpeg_path = os.environ.get("FFMPEG_PATH")
     if ffmpeg_path and Path(ffmpeg_path).exists():
