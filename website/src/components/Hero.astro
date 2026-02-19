@@ -1,0 +1,71 @@
+---
+import type { ReleaseData } from "../lib/github";
+interface Props {
+  release: ReleaseData;
+}
+const { release } = Astro.props;
+const primaryAsset = release.assets.macos ?? release.assets.windows ?? release.assets.linuxAppImage ?? release.assets.linuxDeb ?? release.assets.linuxRpm;
+---
+
+<section class="relative mx-auto max-w-5xl px-6 pt-24 pb-32 sm:pt-32 sm:pb-40">
+  <!-- Soft radial gradient behind headline -->
+  <div class="pointer-events-none absolute left-1/2 top-1/4 -translate-x-1/2 -translate-y-1/2 w-[min(100%,36rem)] rounded-full bg-[var(--color-accent)]/8 blur-[80px]" aria-hidden="true"></div>
+
+  <div class="relative">
+    <h1 class="reveal font-display text-4xl font-bold tracking-tight text-[#fafafa] sm:text-5xl md:text-6xl lg:text-7xl">
+      YouTube
+      <span class="block text-[var(--color-accent)]">Downloader</span>
+    </h1>
+    <p class="reveal reveal-delay-2 mt-6 max-w-xl text-lg leading-relaxed text-[var(--color-muted)] sm:text-xl">
+      Download video and audio from YouTube. Cut and concatenate local files. No system Python or FFmpeg required.
+    </p>
+    <div class="reveal reveal-delay-3 mt-10 flex flex-wrap items-center gap-4" id="hero-downloads">
+      {primaryAsset && (
+        <a
+          href={primaryAsset.url}
+          class="download-cta inline-flex items-center gap-2 rounded-xl bg-[var(--color-accent)] px-7 py-3.5 font-semibold text-white shadow-lg shadow-[var(--color-accent)]/20 transition hover:bg-[var(--color-accent-hover)] hover:shadow-[var(--color-accent)]/25"
+          download
+        >
+          Download for your system
+        </a>
+      )}
+      <a
+        href="#downloads"
+        class="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-7 py-3.5 font-medium text-[var(--color-muted-strong)] backdrop-blur-sm transition hover:border-white/10 hover:bg-[var(--color-surface-elevated)] hover:text-[#fafafa]"
+      >
+        Other platforms
+      </a>
+    </div>
+  </div>
+</section>
+
+<script define:vars={{
+  macUrl: release.assets.macos?.url ?? "",
+  winUrl: release.assets.windows?.url ?? "",
+  linuxUrl: (release.assets.linuxAppImage ?? release.assets.linuxDeb ?? release.assets.linuxRpm)?.url ?? "",
+}}>
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const isMac = /Macintosh|MacIntel/.test(ua) && !/iPhone|iPad|iPod/.test(ua);
+  const isWin = /Windows|Win32|Win64/.test(ua);
+  const isLinux = /Linux/.test(ua) && !/Android/.test(ua);
+  const block = document.getElementById("hero-downloads");
+  if (block) {
+    const cta = block.querySelector(".download-cta");
+    if (cta) {
+      let href = cta.getAttribute("href");
+      let label = "Download for your system";
+      if (isMac && macUrl) {
+        href = macUrl;
+        label = "Download for macOS";
+      } else if (isWin && winUrl) {
+        href = winUrl;
+        label = "Download for Windows";
+      } else if (isLinux && linuxUrl) {
+        href = linuxUrl;
+        label = "Download for Linux";
+      }
+      if (href) cta.setAttribute("href", href);
+      cta.textContent = label;
+    }
+  }
+</script>

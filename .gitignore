@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# pnpm
+.pnpm-store
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -40,3 +43,7 @@ resources/
 src-tauri/target/
 
 .env*
+
+# Astro website
+website/dist
+website/.astro
