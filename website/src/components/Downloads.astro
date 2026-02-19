@@ -1,0 +1,98 @@
+---
+interface Asset {
+  name: string;
+  url: string;
+  size: number;
+}
+interface Release {
+  tag: string;
+  version: string;
+  assets: {
+    macos?: Asset;
+    windows?: Asset;
+    linuxAppImage?: Asset;
+    linuxDeb?: Asset;
+    linuxRpm?: Asset;
+  };
+}
+interface Props {
+  release: Release;
+}
+const { release } = Astro.props;
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+---
+
+<section id="downloads" class="mx-auto max-w-3xl px-6 py-16">
+  <h2 class="text-center text-2xl font-semibold">Downloads</h2>
+  <p class="mt-2 text-center text-zinc-400">Version {release.version} · <a class="text-amber-400 hover:underline" href={`https://github.com/arpitdalal/yt-downloader/releases/tag/${release.tag}`}>Release notes</a></p>
+  <ul class="mt-10 space-y-4">
+    {release.assets.macos && (
+      <li>
+        <a
+          href={release.assets.macos.url}
+          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          data-os="macos"
+          download
+        >
+          <span class="font-medium">macOS (Apple Silicon)</span>
+          <span class="text-sm text-zinc-500">{release.assets.macos.name} · {formatBytes(release.assets.macos.size)}</span>
+        </a>
+      </li>
+    )}
+    {release.assets.windows && (
+      <li>
+        <a
+          href={release.assets.windows.url}
+          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          data-os="windows"
+          download
+        >
+          <span class="font-medium">Windows (x64)</span>
+          <span class="text-sm text-zinc-500">{release.assets.windows.name} · {formatBytes(release.assets.windows.size)}</span>
+        </a>
+      </li>
+    )}
+    {release.assets.linuxAppImage && (
+      <li>
+        <a
+          href={release.assets.linuxAppImage.url}
+          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          data-os="linux"
+          download
+        >
+          <span class="font-medium">Linux (AppImage)</span>
+          <span class="text-sm text-zinc-500">{release.assets.linuxAppImage.name} · {formatBytes(release.assets.linuxAppImage.size)}</span>
+        </a>
+      </li>
+    )}
+    {release.assets.linuxDeb && (
+      <li>
+        <a
+          href={release.assets.linuxDeb.url}
+          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          download
+        >
+          <span class="font-medium">Linux (Debian / Ubuntu)</span>
+          <span class="text-sm text-zinc-500">{release.assets.linuxDeb.name} · {formatBytes(release.assets.linuxDeb.size)}</span>
+        </a>
+      </li>
+    )}
+    {release.assets.linuxRpm && (
+      <li>
+        <a
+          href={release.assets.linuxRpm.url}
+          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          download
+        >
+          <span class="font-medium">Linux (RPM)</span>
+          <span class="text-sm text-zinc-500">{release.assets.linuxRpm.name} · {formatBytes(release.assets.linuxRpm.size)}</span>
+        </a>
+      </li>
+    )}
+  </ul>
+</section>

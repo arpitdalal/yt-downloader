@@ -1,0 +1,75 @@
+---
+interface Asset {
+  name: string;
+  url: string;
+  size: number;
+}
+interface Release {
+  tag: string;
+  version: string;
+  assets: {
+    macos?: Asset;
+    windows?: Asset;
+    linuxAppImage?: Asset;
+    linuxDeb?: Asset;
+    linuxRpm?: Asset;
+  };
+}
+interface Props {
+  release: Release;
+}
+const { release } = Astro.props;
+const primaryAsset = release.assets.macos ?? release.assets.windows ?? release.assets.linuxAppImage ?? release.assets.linuxDeb ?? release.assets.windows;
+---
+
+<section class="mx-auto max-w-3xl px-6 py-20 text-center">
+  <h1 class="text-4xl font-semibold tracking-tight sm:text-5xl">YouTube Downloader</h1>
+  <p class="mt-4 text-lg text-zinc-400">
+    Download videos and audio from YouTube. Cut and concatenate local videos. No system Python or FFmpeg required.
+  </p>
+  <div class="mt-10 flex flex-wrap items-center justify-center gap-4" id="hero-downloads">
+    {primaryAsset && (
+      <a
+        href={primaryAsset.url}
+        class="download-cta inline-flex items-center gap-2 rounded-lg bg-amber-500 px-6 py-3 font-medium text-zinc-950 transition hover:bg-amber-400"
+        download
+      >
+        Download for your system
+      </a>
+    )}
+    <a href="#downloads" class="rounded-lg border border-zinc-600 px-6 py-3 font-medium transition hover:border-zinc-500 hover:bg-zinc-800/50">
+      Other platforms
+    </a>
+  </div>
+</section>
+
+<script define:vars={{
+  macUrl: release.assets.macos?.url ?? "",
+  winUrl: release.assets.windows?.url ?? "",
+  linuxUrl: (release.assets.linuxAppImage ?? release.assets.linuxDeb)?.url ?? "",
+}}>
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const isMac = /Mac|iPod|iPhone|iPad/.test(ua);
+  const isWin = /Windows|Win32|Win64/.test(ua);
+  const isLinux = /Linux/.test(ua) && !/Android/.test(ua);
+  const block = document.getElementById("hero-downloads");
+  if (block) {
+    const cta = block.querySelector(".download-cta");
+    if (cta) {
+      let href = cta.getAttribute("href");
+      let label = "Download for your system";
+      if (isMac && macUrl) {
+        href = macUrl;
+        label = "Download for macOS";
+      } else if (isWin && winUrl) {
+        href = winUrl;
+        label = "Download for Windows";
+      } else if (isLinux && linuxUrl) {
+        href = linuxUrl;
+        label = "Download for Linux";
+      }
+      if (href) cta.setAttribute("href", href);
+      cta.textContent = label;
+    }
+  }
+</script>
