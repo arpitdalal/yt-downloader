@@ -1782,10 +1782,14 @@ class TestDownloadVideo:
         """Default selectors should prioritize MP4-compatible formats."""
         selectors = YouTubeDownloader._build_format_selectors("bestvideo*+bestaudio")
         assert selectors == [
-            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]",
-            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[acodec!=none]",
-            "best[ext=mp4][vcodec!=none][acodec!=none]",
-            "best[ext=mp4]/best",
+            "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]"
+            "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=mp4a]"
+            "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=aac]"
+            "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=aac]",
+            "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+            "/best[ext=mp4][vcodec^=h264][acodec^=mp4a]"
+            "/best[ext=mp4][vcodec^=avc1][acodec^=aac]"
+            "/best[ext=mp4][vcodec^=h264][acodec^=aac]",
         ]
 
     def test_browser_cookie_candidates_support_csv(self):
@@ -1884,9 +1888,12 @@ class TestDownloadVideo:
                                         )
                                         assert result.success is True
                                         attempted_non_empty = [fmt for fmt in attempted_formats if fmt]
+                                        default_selector = YouTubeDownloader._build_format_selectors(
+                                            "bestvideo*+bestaudio"
+                                        )[0]
                                         assert attempted_non_empty[:2] == [
                                             "nonexistent",
-                                            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]",
+                                            default_selector,
                                         ]
 
     def test_download_ffmpeg_merge_error_does_not_fallback_to_progressive(self, temp_dir, sample_video_info):
@@ -1938,9 +1945,8 @@ class TestDownloadVideo:
                         assert result.success is False
                         assert "FFmpeg is required" in (result.error_message or "")
                         attempted_non_empty = [fmt for fmt in attempted_formats if fmt]
-                        assert attempted_non_empty == [
-                            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]"
-                        ]
+                        default_selector = YouTubeDownloader._build_format_selectors("bestvideo*+bestaudio")[0]
+                        assert attempted_non_empty == [default_selector]
 
     def test_download_ffmpeg_merging_error_does_not_fallback_to_progressive(self, temp_dir, sample_video_info):
         """If yt-dlp reports `merging` wording, fail explicitly instead of low quality fallback."""
@@ -1994,9 +2000,8 @@ class TestDownloadVideo:
                         assert result.success is False
                         assert "FFmpeg is required" in (result.error_message or "")
                         attempted_non_empty = [fmt for fmt in attempted_formats if fmt]
-                        assert attempted_non_empty == [
-                            "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]"
-                        ]
+                        default_selector = YouTubeDownloader._build_format_selectors("bestvideo*+bestaudio")[0]
+                        assert attempted_non_empty == [default_selector]
 
     def test_download_falls_back_to_restricted_progressive_on_403(self, temp_dir, sample_video_info):
         """When HQ streams are blocked (403), fallback profile should download progressive format."""
@@ -2505,15 +2510,20 @@ class TestDownloadVideo:
                                         "_transcode_to_quicktime_mp4",
                                         side_effect=lambda _src, dst: Path(dst).write_bytes(b"qtmp4") or True,
                                     ) as mock_transcode:
-                                        result = downloader.download_video(
-                                            "https://youtube.com/watch?v=test",
-                                            str(output_file),
-                                        )
-                                        assert result.success is True
-                                        mock_transcode.assert_called_once()
-                                        called_src, called_dst = mock_transcode.call_args.args
-                                        assert called_src == downloaded_file
-                                        assert called_dst == output_file
+                                        with patch.dict(
+                                            os.environ,
+                                            {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
+                                            clear=False,
+                                        ):
+                                            result = downloader.download_video(
+                                                "https://youtube.com/watch?v=test",
+                                                str(output_file),
+                                            )
+                                            assert result.success is True
+                                            mock_transcode.assert_called_once()
+                                            called_src, called_dst = mock_transcode.call_args.args
+                                            assert called_src == downloaded_file
+                                            assert called_dst == output_file
 
     def test_download_transcodes_incompatible_mp4_codec_for_mp4_output(self, temp_dir, sample_video_info):
         """When source is mp4+AV1, downloader should run compatibility transcode."""
@@ -2576,16 +2586,21 @@ class TestDownloadVideo:
                                             "_transcode_to_quicktime_mp4",
                                             side_effect=lambda _src, dst: Path(dst).write_bytes(b"qtmp4") or True,
                                         ) as mock_transcode:
-                                            result = downloader.download_video(
-                                                "https://youtube.com/watch?v=test",
-                                                str(output_file),
-                                            )
-                                            assert result.success is True
-                                            mock_probe.assert_called_once_with(downloaded_file)
-                                            mock_transcode.assert_called_once()
-                                            called_src, called_dst = mock_transcode.call_args.args
-                                            assert called_src == downloaded_file
-                                            assert called_dst == output_file
+                                            with patch.dict(
+                                                os.environ,
+                                                {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
+                                                clear=False,
+                                            ):
+                                                result = downloader.download_video(
+                                                    "https://youtube.com/watch?v=test",
+                                                    str(output_file),
+                                                )
+                                                assert result.success is True
+                                                mock_probe.assert_called_once_with(downloaded_file)
+                                                mock_transcode.assert_called_once()
+                                                called_src, called_dst = mock_transcode.call_args.args
+                                                assert called_src == downloaded_file
+                                                assert called_dst == output_file
 
     def test_download_transcodes_incompatible_mp4_codec_for_cut_output(self, temp_dir, sample_video_info):
         """When needs_cut=True, transcode should run with identical src/dst output path."""
@@ -2650,18 +2665,23 @@ class TestDownloadVideo:
                                             "_transcode_to_quicktime_mp4",
                                             side_effect=lambda _src, dst: Path(dst).write_bytes(b"qtmp4") or True,
                                         ) as mock_transcode:
-                                            result = downloader.download_video(
-                                                "https://youtube.com/watch?v=test",
-                                                str(output_file),
-                                                start_time=10,
-                                                end_time=30,
-                                            )
-                                            assert result.success is True
-                                            mock_probe.assert_called_once_with(output_file)
-                                            mock_transcode.assert_called_once()
-                                            called_src, called_dst = mock_transcode.call_args.args
-                                            assert called_src == output_file
-                                            assert called_dst == output_file
+                                            with patch.dict(
+                                                os.environ,
+                                                {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
+                                                clear=False,
+                                            ):
+                                                result = downloader.download_video(
+                                                    "https://youtube.com/watch?v=test",
+                                                    str(output_file),
+                                                    start_time=10,
+                                                    end_time=30,
+                                                )
+                                                assert result.success is True
+                                                mock_probe.assert_called_once_with(output_file)
+                                                mock_transcode.assert_called_once()
+                                                called_src, called_dst = mock_transcode.call_args.args
+                                                assert called_src == output_file
+                                                assert called_dst == output_file
 
     def test_download_fails_when_mp4_compat_transcode_fails(self, temp_dir, sample_video_info):
         """If compatibility transcode fails, downloader should return clear failure."""
@@ -2719,12 +2739,17 @@ class TestDownloadVideo:
                                         "_transcode_to_quicktime_mp4",
                                         return_value=False,
                                     ):
-                                        result = downloader.download_video(
-                                            "https://youtube.com/watch?v=test",
-                                            str(output_file),
-                                        )
-                                        assert result.success is False
-                                        assert "QuickTime-compatible" in (result.error_message or "")
+                                        with patch.dict(
+                                            os.environ,
+                                            {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
+                                            clear=False,
+                                        ):
+                                            result = downloader.download_video(
+                                                "https://youtube.com/watch?v=test",
+                                                str(output_file),
+                                            )
+                                            assert result.success is False
+                                            assert "QuickTime-compatible" in (result.error_message or "")
 
     def test_download_live_stream(self, temp_dir, mock_ytdlp_download, sample_live_video_info):
         """Test downloading live stream"""
