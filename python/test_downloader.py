@@ -2410,6 +2410,32 @@ class TestDownloadVideo:
             is True
         )
 
+    def test_requires_mp4_compatibility_transcode_for_incompatible_mp4_codec_probe(self):
+        """AV1 in mp4 should trigger transcode even if container is mp4."""
+        assert (
+            YouTubeDownloader._requires_mp4_compatibility_transcode(
+                Path("/tmp/source.mp4"),
+                Path("/tmp/output.mp4"),
+                None,
+                source_video_codec="av1",
+                source_audio_codec="aac",
+            )
+            is True
+        )
+
+    def test_requires_mp4_compatibility_transcode_prefers_probe_over_selected_format(self):
+        """Probe data should win over optimistic selected_format metadata."""
+        assert (
+            YouTubeDownloader._requires_mp4_compatibility_transcode(
+                Path("/tmp/source.mp4"),
+                Path("/tmp/output.mp4"),
+                {"vcodec": "h264", "acodec": "aac"},
+                source_video_codec="av1",
+                source_audio_codec="aac",
+            )
+            is True
+        )
+
     def test_download_transcodes_non_mp4_source_for_mp4_output(self, temp_dir, sample_video_info):
         """When source is webm and output is mp4, downloader should run compatibility transcode."""
         output_file = temp_dir / "output.mp4"
@@ -2475,6 +2501,77 @@ class TestDownloadVideo:
                                         called_src, called_dst = mock_transcode.call_args.args
                                         assert called_src == downloaded_file
                                         assert called_dst == output_file
+
+    def test_download_transcodes_incompatible_mp4_codec_for_mp4_output(self, temp_dir, sample_video_info):
+        """When source is mp4+AV1, downloader should run compatibility transcode."""
+        output_file = temp_dir / "output.mp4"
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.mp4"
+        downloaded_file.write_bytes(b"video data")
+
+        downloader = YouTubeDownloader()
+
+        class MockYDL:
+            def __init__(self, _opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                return None
+
+        with patch.object(
+            downloader,
+            "extract_video_info",
+            return_value=VideoInfo(
+                id=sample_video_info["id"],
+                title=sample_video_info["title"],
+                duration=sample_video_info["duration"],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None,
+            ),
+        ):
+            with patch.object(downloader, "_get_temp_dir", return_value=temp_dir):
+                with patch.object(downloader, "_get_cached_video_path", return_value=None):
+                    with patch.object(
+                        downloader,
+                        "_find_downloaded_file",
+                        return_value=downloaded_file,
+                    ):
+                        with patch.object(downloader, "_check_file_stability", return_value=True):
+                            with patch("downloader.shutil.copy2") as mock_copy:
+                                mock_copy.side_effect = lambda src, dst: Path(dst).write_bytes(b"copied data")
+                                with patch(
+                                    "downloader.yt_dlp.YoutubeDL",
+                                    side_effect=lambda opts: MockYDL(opts),
+                                ):
+                                    with patch.object(
+                                        downloader,
+                                        "_probe_primary_stream_codecs",
+                                        return_value=("av1", "aac"),
+                                    ):
+                                        with patch.object(
+                                            downloader,
+                                            "_transcode_to_quicktime_mp4",
+                                            side_effect=lambda src, dst: Path(dst).write_bytes(b"qtmp4") or True,
+                                        ) as mock_transcode:
+                                            result = downloader.download_video(
+                                                "https://youtube.com/watch?v=test",
+                                                str(output_file),
+                                            )
+                                            assert result.success is True
+                                            mock_transcode.assert_called_once()
+                                            called_src, called_dst = mock_transcode.call_args.args
+                                            assert called_src == downloaded_file
+                                            assert called_dst == output_file
 
     def test_download_fails_when_mp4_compat_transcode_fails(self, temp_dir, sample_video_info):
         """If compatibility transcode fails, downloader should return clear failure."""

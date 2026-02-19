@@ -499,6 +499,61 @@ class YouTubeDownloader:
         ):
             return None
 
+    def _probe_primary_stream_codecs(self, file_path: Path) -> tuple[str | None, str | None]:
+        """Read first video/audio codec names via ffprobe."""
+        ffprobe_path = self._resolve_ffprobe_path()
+        if not ffprobe_path:
+            return (None, None)
+
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe_path,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_type,codec_name",
+                    "-of",
+                    "json",
+                    str(file_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return (None, None)
+
+            payload = json.loads(result.stdout)
+            streams = payload.get("streams") or []
+            if not isinstance(streams, list):
+                return (None, None)
+
+            video_codec = None
+            audio_codec = None
+            for stream in streams:
+                if not isinstance(stream, dict):
+                    continue
+                codec_type = str(stream.get("codec_type") or "").strip().lower()
+                codec_name = str(stream.get("codec_name") or "").strip().lower() or None
+                if codec_type == "video" and video_codec is None:
+                    video_codec = codec_name
+                elif codec_type == "audio" and audio_codec is None:
+                    audio_codec = codec_name
+                if video_codec is not None and audio_codec is not None:
+                    break
+
+            return (video_codec, audio_codec)
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            json.JSONDecodeError,
+            ValueError,
+            TypeError,
+        ):
+            return (None, None)
+
     def _cleanup_incomplete_download_files(self, temp_dir: Path, cache_video_id: str) -> None:
         """Delete stale partial files before retrying with another selector."""
         for file_path in temp_dir.glob(f"{cache_video_id}*"):
@@ -757,8 +812,31 @@ class YouTubeDownloader:
         return None
 
     @staticmethod
+    def _is_quicktime_video_codec(codec: str | None) -> bool:
+        normalized = str(codec or "").strip().lower()
+        if normalized in ("", "none"):
+            return True
+        return (
+            normalized.startswith("avc1")
+            or normalized.startswith("h264")
+            or normalized.startswith("hevc")
+            or normalized.startswith("h265")
+        )
+
+    @staticmethod
+    def _is_quicktime_audio_codec(codec: str | None) -> bool:
+        normalized = str(codec or "").strip().lower()
+        if normalized in ("", "none"):
+            return True
+        return normalized in ("aac", "mp3", "ac3", "eac3", "alac")
+
+    @staticmethod
     def _requires_mp4_compatibility_transcode(
-        source_path: Path, output_path: Path, selected_format: dict | None
+        source_path: Path,
+        output_path: Path,
+        selected_format: dict | None,
+        source_video_codec: str | None = None,
+        source_audio_codec: str | None = None,
     ) -> bool:
         """Decide whether final .mp4 should be transcoded for QuickTime compatibility."""
         if output_path.suffix.lower() != ".mp4":
@@ -768,27 +846,21 @@ class YouTubeDownloader:
         if source_ext not in (".mp4", ".m4v", ".mov"):
             return True
 
+        if not YouTubeDownloader._is_quicktime_video_codec(source_video_codec):
+            return True
+
+        if not YouTubeDownloader._is_quicktime_audio_codec(source_audio_codec):
+            return True
+
         if not isinstance(selected_format, dict):
             return False
 
         video_codec = str(selected_format.get("vcodec") or "").strip().lower()
-        if video_codec and not (
-            video_codec.startswith("avc1")
-            or video_codec.startswith("h264")
-            or video_codec.startswith("hevc")
-            or video_codec.startswith("h265")
-        ):
+        if not YouTubeDownloader._is_quicktime_video_codec(video_codec):
             return True
 
         audio_codec = str(selected_format.get("acodec") or "").strip().lower()
-        if audio_codec and audio_codec not in (
-            "none",
-            "aac",
-            "mp3",
-            "ac3",
-            "eac3",
-            "alac",
-        ):
+        if not YouTubeDownloader._is_quicktime_audio_codec(audio_codec):
             return True
 
         return False
@@ -1667,18 +1739,39 @@ class YouTubeDownloader:
                 )
 
         final_path_obj = Path(final_file_path)
+        transcode_input = final_path_obj if needs_cut else original_file_path
+        source_video_codec = None
+        source_audio_codec = None
+        if final_path_obj.suffix.lower() == ".mp4" and transcode_input.suffix.lower() in (".mp4", ".m4v", ".mov"):
+            source_video_codec, source_audio_codec = self._probe_primary_stream_codecs(transcode_input)
+            self._emit_debug_event(
+                "quality_debug",
+                {
+                    "event": "mp4_compat_probe",
+                    "input_path": str(transcode_input),
+                    "source_video_codec": source_video_codec,
+                    "source_audio_codec": source_audio_codec,
+                    "selected_format": progress_tracker.selected_format,
+                },
+            )
+
         requires_mp4_compat = self._requires_mp4_compatibility_transcode(
-            original_file_path, final_path_obj, progress_tracker.selected_format
+            transcode_input,
+            final_path_obj,
+            progress_tracker.selected_format,
+            source_video_codec=source_video_codec,
+            source_audio_codec=source_audio_codec,
         )
         if requires_mp4_compat:
-            transcode_input = final_path_obj if needs_cut else original_file_path
             self._emit_debug_event(
                 "quality_debug",
                 {
                     "event": "mp4_compat_transcode",
                     "input_path": str(transcode_input),
                     "output_path": str(final_path_obj),
-                    "source_ext": original_file_path.suffix.lower(),
+                    "source_ext": transcode_input.suffix.lower(),
+                    "source_video_codec": source_video_codec,
+                    "source_audio_codec": source_audio_codec,
                     "selected_format": progress_tracker.selected_format,
                 },
             )
