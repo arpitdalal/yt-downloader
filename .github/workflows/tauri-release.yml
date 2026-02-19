@@ -300,7 +300,7 @@ jobs:
     needs: [publish-release]
     runs-on: ubuntu-22.04
     concurrency:
-      group: deploy-website-${{ github.ref }}
+      group: deploy-website-${{ github.repository }}
       cancel-in-progress: true
     permissions:
       contents: read
@@ -331,6 +331,10 @@ jobs:
         run: pnpm --filter website build
         env:
           ASTRO_TELEMETRY_DISABLED: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

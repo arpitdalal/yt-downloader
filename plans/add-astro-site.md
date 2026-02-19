@@ -92,15 +92,15 @@ export default defineConfig({
 
 ### Download data — `website/src/lib/github.ts`
 
-At **build time**, fetches `https://api.github.com/repos/arpitdalal/yt-downloader/releases/latest` and maps assets by extension:
+At **build time**, fetches `https://api.github.com/repos/arpitdalal/yt-downloader/releases/latest` and maps assets by extension. Use `GITHUB_TOKEN` from the environment when set (e.g. in CI) as `Authorization: Bearer <token>` to avoid rate limits. On non-OK or thrown errors, log the failure then return empty release data.
 
-- `.dmg` -> macOS (Apple Silicon)
+- `.dmg` -> macOS by arch: filenames containing `aarch64`/`arm64` -> `macosAppleSilicon`, `x64`/`x86_64` -> `macosIntel`; expose a single `macos` for primary button as `macosAppleSilicon ?? macosIntel`
 - `.exe` -> Windows (x64)
 - `.AppImage` -> Linux (AppImage)
 - `.deb` -> Linux (Debian/Ubuntu)
 - `.rpm` -> Linux (RPM, if present)
 
-Returns structured data: `{ tag, version, assets: { macos, windows, linuxAppImage, linuxDeb, linuxRpm? } }` with each asset having `{ name, url, size }`.
+Returns structured data: `{ tag, version, assets: { macos?, macosAppleSilicon?, macosIntel?, windows, linuxAppImage, linuxDeb, linuxRpm? } }` with each asset `{ name, url, size }`. Duplicate assets (same slot) should be warned and first kept.
 
 **Why fetch from API instead of constructing URLs**: the release tag (`v2.0.4`) and filename version (`2.0.0`) can differ (they do currently). Asset filenames are Tauri-generated and opaque. API fetch is the only reliable approach.
 
@@ -126,7 +126,11 @@ deploy-website:
   if: startsWith(github.ref, 'refs/tags/v')
   needs: [publish-release]
   runs-on: ubuntu-22.04
+  concurrency:
+    group: deploy-website-${{ github.repository }}
+    cancel-in-progress: true
   permissions:
+    contents: read
     pages: write
     id-token: write
   environment:
@@ -143,6 +147,9 @@ deploy-website:
         cache: "pnpm"
     - run: pnpm install --frozen-lockfile
     - run: pnpm --filter website build
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/configure-pages@v4
     - uses: actions/upload-pages-artifact@v3
       with:
         path: website/dist

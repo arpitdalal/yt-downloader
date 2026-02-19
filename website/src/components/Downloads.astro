@@ -20,7 +20,33 @@ function formatBytes(n: number) {
     Version {release.version} · <a class="text-[var(--color-accent)] hover:underline" href={`https://github.com/arpitdalal/yt-downloader/releases/tag/${release.tag}`}>Release notes</a>
   </p>
   <ul class="mt-8 space-y-3">
-    {release.assets.macos && (
+    {release.assets.macosAppleSilicon && (
+      <li>
+        <a
+          href={release.assets.macosAppleSilicon.url}
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
+          data-os="macos"
+          download
+        >
+          <span class="font-medium text-[#fafafa]">macOS (Apple Silicon)</span>
+          <span class="text-sm text-[var(--color-muted)]">{release.assets.macosAppleSilicon.name} · {formatBytes(release.assets.macosAppleSilicon.size)}</span>
+        </a>
+      </li>
+    )}
+    {release.assets.macosIntel && (
+      <li>
+        <a
+          href={release.assets.macosIntel.url}
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
+          data-os="macos"
+          download
+        >
+          <span class="font-medium text-[#fafafa]">macOS (Intel)</span>
+          <span class="text-sm text-[var(--color-muted)]">{release.assets.macosIntel.name} · {formatBytes(release.assets.macosIntel.size)}</span>
+        </a>
+      </li>
+    )}
+    {release.assets.macos && !release.assets.macosAppleSilicon && !release.assets.macosIntel && (
       <li>
         <a
           href={release.assets.macos.url}
@@ -28,7 +54,7 @@ function formatBytes(n: number) {
           data-os="macos"
           download
         >
-          <span class="font-medium text-[#fafafa]">macOS (Apple Silicon)</span>
+          <span class="font-medium text-[#fafafa]">macOS</span>
           <span class="text-sm text-[var(--color-muted)]">{release.assets.macos.name} · {formatBytes(release.assets.macos.size)}</span>
         </a>
       </li>
