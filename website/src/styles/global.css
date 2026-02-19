@@ -1,1 +1,69 @@
 @import "tailwindcss";
+
+@theme {
+  --font-display: "Syne", system-ui, sans-serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
+  --color-canvas: #08080a;
+  --color-surface: #0f0f12;
+  --color-surface-elevated: #16161a;
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-muted: #71717a;
+  --color-muted-strong: #a1a1aa;
+  --color-accent: #f43f5e;
+  --color-accent-hover: #fb7185;
+  --color-accent-muted: rgba(244, 63, 94, 0.15);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    font-family: var(--font-body);
+    background-color: var(--color-canvas);
+    color: #fafafa;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Grain overlay for depth */
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Staggered reveal animation */
+.reveal {
+  opacity: 0;
+  transform: translateY(1rem);
+  animation: reveal 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.reveal-delay-1 { animation-delay: 0.1s; }
+.reveal-delay-2 { animation-delay: 0.2s; }
+.reveal-delay-3 { animation-delay: 0.35s; }
+.reveal-delay-4 { animation-delay: 0.5s; }
+.reveal-delay-5 { animation-delay: 0.65s; }
+@keyframes reveal {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scroll-in for sections */
+.scroll-in {
+  opacity: 0;
+  transform: translateY(1.5rem);
+  transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1), transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.scroll-in.visible {
+  opacity: 1;
+  transform: translateY(0);
+}

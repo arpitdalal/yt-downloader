@@ -19,16 +19,28 @@ const features = [
 ];
 ---
 
-<section class="border-y border-zinc-800 bg-zinc-900/30 px-6 py-16">
-  <div class="mx-auto max-w-4xl">
-    <h2 class="text-center text-2xl font-semibold">Features</h2>
-    <ul class="mt-10 grid gap-8 sm:grid-cols-2">
-      {features.map((f) => (
-        <li class="rounded-lg border border-zinc-700/50 bg-zinc-900/50 p-6">
-          <h3 class="font-medium text-amber-400/90">{f.title}</h3>
-          <p class="mt-2 text-sm text-zinc-400">{f.description}</p>
+<section class="border-y border-[var(--color-border)] bg-[var(--color-surface)]/60 px-6 py-24 sm:py-28">
+  <div class="mx-auto max-w-5xl">
+    <h2 class="scroll-in font-display text-center text-2xl font-bold tracking-tight text-[#fafafa] sm:text-3xl">
+      Features
+    </h2>
+    <ul class="mt-14 grid gap-5 sm:grid-cols-2 sm:gap-6">
+      {features.map((f, i) => (
+        <li class="scroll-in rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 p-6 backdrop-blur-sm transition hover:border-white/10 hover:bg-[var(--color-surface-elevated)] sm:p-7">
+          <h3 class="font-display font-semibold text-[var(--color-accent)]">{f.title}</h3>
+          <p class="mt-2 text-[15px] leading-relaxed text-[var(--color-muted)]">{f.description}</p>
         </li>
       ))}
     </ul>
   </div>
 </section>
+
+<script>
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((e) => e.isIntersecting && e.target.classList.add("visible"));
+    },
+    { rootMargin: "0px 0px -80px 0px", threshold: 0.1 }
+  );
+  document.querySelectorAll(".scroll-in").forEach((el) => observer.observe(el));
+</script>

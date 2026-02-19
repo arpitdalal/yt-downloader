@@ -27,20 +27,24 @@ function formatBytes(n: number) {
 }
 ---
 
-<section id="downloads" class="mx-auto max-w-3xl px-6 py-16">
-  <h2 class="text-center text-2xl font-semibold">Downloads</h2>
-  <p class="mt-2 text-center text-zinc-400">Version {release.version} · <a class="text-amber-400 hover:underline" href={`https://github.com/arpitdalal/yt-downloader/releases/tag/${release.tag}`}>Release notes</a></p>
-  <ul class="mt-10 space-y-4">
+<section id="downloads" class="scroll-in mx-auto max-w-3xl px-6 py-24 sm:py-28">
+  <h2 class="font-display text-2xl font-bold tracking-tight text-[#fafafa] sm:text-3xl">
+    Downloads
+  </h2>
+  <p class="mt-2 text-[var(--color-muted)]">
+    Version {release.version} · <a class="text-[var(--color-accent)] hover:underline" href={`https://github.com/arpitdalal/yt-downloader/releases/tag/${release.tag}`}>Release notes</a>
+  </p>
+  <ul class="mt-8 space-y-3">
     {release.assets.macos && (
       <li>
         <a
           href={release.assets.macos.url}
-          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
           data-os="macos"
           download
         >
-          <span class="font-medium">macOS (Apple Silicon)</span>
-          <span class="text-sm text-zinc-500">{release.assets.macos.name} · {formatBytes(release.assets.macos.size)}</span>
+          <span class="font-medium text-[#fafafa]">macOS (Apple Silicon)</span>
+          <span class="text-sm text-[var(--color-muted)]">{release.assets.macos.name} · {formatBytes(release.assets.macos.size)}</span>
         </a>
       </li>
     )}
@@ -48,12 +52,12 @@ function formatBytes(n: number) {
       <li>
         <a
           href={release.assets.windows.url}
-          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
           data-os="windows"
           download
         >
-          <span class="font-medium">Windows (x64)</span>
-          <span class="text-sm text-zinc-500">{release.assets.windows.name} · {formatBytes(release.assets.windows.size)}</span>
+          <span class="font-medium text-[#fafafa]">Windows (x64)</span>
+          <span class="text-sm text-[var(--color-muted)]">{release.assets.windows.name} · {formatBytes(release.assets.windows.size)}</span>
         </a>
       </li>
     )}
@@ -61,12 +65,12 @@ function formatBytes(n: number) {
       <li>
         <a
           href={release.assets.linuxAppImage.url}
-          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
           data-os="linux"
           download
         >
-          <span class="font-medium">Linux (AppImage)</span>
-          <span class="text-sm text-zinc-500">{release.assets.linuxAppImage.name} · {formatBytes(release.assets.linuxAppImage.size)}</span>
+          <span class="font-medium text-[#fafafa]">Linux (AppImage)</span>
+          <span class="text-sm text-[var(--color-muted)]">{release.assets.linuxAppImage.name} · {formatBytes(release.assets.linuxAppImage.size)}</span>
         </a>
       </li>
     )}
@@ -74,11 +78,11 @@ function formatBytes(n: number) {
       <li>
         <a
           href={release.assets.linuxDeb.url}
-          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
           download
         >
-          <span class="font-medium">Linux (Debian / Ubuntu)</span>
-          <span class="text-sm text-zinc-500">{release.assets.linuxDeb.name} · {formatBytes(release.assets.linuxDeb.size)}</span>
+          <span class="font-medium text-[#fafafa]">Linux (Debian / Ubuntu)</span>
+          <span class="text-sm text-[var(--color-muted)]">{release.assets.linuxDeb.name} · {formatBytes(release.assets.linuxDeb.size)}</span>
         </a>
       </li>
     )}
@@ -86,11 +90,11 @@ function formatBytes(n: number) {
       <li>
         <a
           href={release.assets.linuxRpm.url}
-          class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-700 px-4 py-3 transition hover:border-amber-500/50 hover:bg-zinc-800/50"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
           download
         >
-          <span class="font-medium">Linux (RPM)</span>
-          <span class="text-sm text-zinc-500">{release.assets.linuxRpm.name} · {formatBytes(release.assets.linuxRpm.size)}</span>
+          <span class="font-medium text-[#fafafa]">Linux (RPM)</span>
+          <span class="text-sm text-[var(--color-muted)]">{release.assets.linuxRpm.name} · {formatBytes(release.assets.linuxRpm.size)}</span>
         </a>
       </li>
     )}

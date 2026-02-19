@@ -9,10 +9,10 @@ interface Props {
 const { release } = Astro.props;
 ---
 
-<footer class="border-t border-zinc-800 px-6 py-8">
-  <div class="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-4 text-sm text-zinc-500">
+<footer class="border-t border-[var(--color-border)] px-6 py-8">
+  <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 text-sm text-[var(--color-muted)]">
     <span>v{release.version}</span>
-    <a href="https://github.com/arpitdalal/yt-downloader" class="text-amber-400/90 hover:underline">GitHub</a>
+    <a href="https://github.com/arpitdalal/yt-downloader" class="text-[var(--color-accent)] hover:underline">GitHub</a>
     <span>MIT License</span>
   </div>
 </footer>
