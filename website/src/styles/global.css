@@ -57,13 +57,37 @@
   }
 }
 
-/* Scroll-in for sections */
+/* Scroll-in for sections: visible by default; JS adds .js-ready and reveals on scroll */
 .scroll-in {
+  opacity: 1;
+  transform: none;
+}
+.js-ready .scroll-in {
   opacity: 0;
   transform: translateY(1.5rem);
   transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1), transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.scroll-in.visible {
+.js-ready .scroll-in.visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .reveal-delay-1,
+  .reveal-delay-2,
+  .reveal-delay-3,
+  .reveal-delay-4,
+  .reveal-delay-5 {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+  .scroll-in,
+  .js-ready .scroll-in,
+  .js-ready .scroll-in.visible {
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
 }

@@ -55,7 +55,9 @@ function emptyRelease(): ReleaseData {
 
 export async function getReleaseData(): Promise<ReleaseData> {
   try {
+    const signal = AbortSignal.timeout(5000);
     const res = await fetch(API_URL, {
+      signal,
       headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     });
     if (!res.ok) {

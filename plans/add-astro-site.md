@@ -78,13 +78,15 @@ website/
 
 ```js
 import { defineConfig } from "astro/config";
-import tailwindcss from "@astrojs/tailwind";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   site: "https://arpitdalal.github.io",
   base: "/yt-downloader",
   output: "static",
-  integrations: [tailwindcss()],
+  vite: {
+    plugins: [tailwindcss()],
+  },
 });
 ```
 

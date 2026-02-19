@@ -11,6 +11,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-22.04
+    concurrency:
+      group: deploy-website-${{ github.repository }}
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -36,6 +39,9 @@ jobs:
         run: pnpm --filter website build
         env:
           ASTRO_TELEMETRY_DISABLED: 1
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

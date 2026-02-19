@@ -34,13 +34,3 @@ const features = [
     </ul>
   </div>
 </section>
-
-<script>
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((e) => e.isIntersecting && e.target.classList.add("visible"));
-    },
-    { rootMargin: "0px 0px -80px 0px", threshold: 0.1 }
-  );
-  document.querySelectorAll(".scroll-in").forEach((el) => observer.observe(el));
-</script>

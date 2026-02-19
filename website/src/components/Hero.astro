@@ -1,25 +1,10 @@
 ---
-interface Asset {
-  name: string;
-  url: string;
-  size: number;
-}
-interface Release {
-  tag: string;
-  version: string;
-  assets: {
-    macos?: Asset;
-    windows?: Asset;
-    linuxAppImage?: Asset;
-    linuxDeb?: Asset;
-    linuxRpm?: Asset;
-  };
-}
+import type { ReleaseData } from "../lib/github";
 interface Props {
-  release: Release;
+  release: ReleaseData;
 }
 const { release } = Astro.props;
-const primaryAsset = release.assets.macos ?? release.assets.windows ?? release.assets.linuxAppImage ?? release.assets.linuxDeb ?? release.assets.windows;
+const primaryAsset = release.assets.macos ?? release.assets.windows ?? release.assets.linuxAppImage ?? release.assets.linuxDeb ?? release.assets.linuxRpm;
 ---
 
 <section class="relative mx-auto max-w-5xl px-6 pt-24 pb-32 sm:pt-32 sm:pb-40">
@@ -57,10 +42,10 @@ const primaryAsset = release.assets.macos ?? release.assets.windows ?? release.a
 <script define:vars={{
   macUrl: release.assets.macos?.url ?? "",
   winUrl: release.assets.windows?.url ?? "",
-  linuxUrl: (release.assets.linuxAppImage ?? release.assets.linuxDeb)?.url ?? "",
+  linuxUrl: (release.assets.linuxAppImage ?? release.assets.linuxDeb ?? release.assets.linuxRpm)?.url ?? "",
 }}>
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
-  const isMac = /Mac|iPod|iPhone|iPad/.test(ua);
+  const isMac = /Macintosh|MacIntel/.test(ua) && !/iPhone|iPad|iPod/.test(ua);
   const isWin = /Windows|Win32|Win64/.test(ua);
   const isLinux = /Linux/.test(ua) && !/Android/.test(ua);
   const block = document.getElementById("hero-downloads");

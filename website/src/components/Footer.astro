@@ -1,10 +1,7 @@
 ---
-interface Release {
-  tag: string;
-  version: string;
-}
+import type { ReleaseData } from "../lib/github";
 interface Props {
-  release: Release;
+  release: ReleaseData;
 }
 const { release } = Astro.props;
 ---

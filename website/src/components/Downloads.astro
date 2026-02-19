@@ -1,28 +1,13 @@
 ---
-interface Asset {
-  name: string;
-  url: string;
-  size: number;
-}
-interface Release {
-  tag: string;
-  version: string;
-  assets: {
-    macos?: Asset;
-    windows?: Asset;
-    linuxAppImage?: Asset;
-    linuxDeb?: Asset;
-    linuxRpm?: Asset;
-  };
-}
+import type { ReleaseData } from "../lib/github";
 interface Props {
-  release: Release;
+  release: ReleaseData;
 }
 const { release } = Astro.props;
 
 function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} MB`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 ---
@@ -79,6 +64,7 @@ function formatBytes(n: number) {
         <a
           href={release.assets.linuxDeb.url}
           class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
+          data-os="linux"
           download
         >
           <span class="font-medium text-[#fafafa]">Linux (Debian / Ubuntu)</span>
@@ -91,6 +77,7 @@ function formatBytes(n: number) {
         <a
           href={release.assets.linuxRpm.url}
           class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/80 px-5 py-4 transition hover:border-[var(--color-accent)]/30 hover:bg-[var(--color-surface-elevated)]"
+          data-os="linux"
           download
         >
           <span class="font-medium text-[#fafafa]">Linux (RPM)</span>
