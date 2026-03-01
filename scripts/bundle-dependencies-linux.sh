@@ -78,15 +78,15 @@ echo "OK: Python bundled at $PYTHON_DIR"
 
 printf '\n=== Step 2: FFmpeg ===\n'
 # Pinned release (yt-dlp/FFmpeg-Builds). Upgrade by choosing a newer autobuild-* tag and updating SHA + archive base.
-FFMPEG_RELEASE_TAG="autobuild-2026-02-13-14-51"
+FFMPEG_RELEASE_TAG="autobuild-2026-02-28-14-21"
 case "$PYTHON_ARCH" in
   x86_64)
-    FFMPEG_ARCHIVE_BASE="ffmpeg-N-122740-g0a629df0a8-linux64-gpl"
-    FFMPEG_SHA256="2b32e14dd5c79e69d4f932e4c5800910a25aa948416dcd7ea33c60d4926b595e"
+    FFMPEG_ARCHIVE_BASE="ffmpeg-N-123074-g4e32fb4c2a-linux64-gpl"
+    FFMPEG_SHA256="1c60f64c762b9ad1cfad98ca96f874650509b5998ba5294a30ec1168fd09ea1d"
     ;;
   aarch64 | arm64)
-    FFMPEG_ARCHIVE_BASE="ffmpeg-N-122740-g0a629df0a8-linuxarm64-gpl"
-    FFMPEG_SHA256="79c3dec8f707e59a0be469dbd2ba6967a1bd63ff91a38d210a4e169d81a1eae3"
+    FFMPEG_ARCHIVE_BASE="ffmpeg-N-123074-g4e32fb4c2a-linuxarm64-gpl"
+    FFMPEG_SHA256="d26434f986bc5b96ab19e9886cc2b512aec6027c6e74455039cf2ca2146e1c5c"
     ;;
   *)
     echo "Unsupported Linux architecture for bundled FFmpeg: $PYTHON_ARCH"
