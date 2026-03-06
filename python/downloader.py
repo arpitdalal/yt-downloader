@@ -29,7 +29,7 @@ MAX_RETRY_DELAY = 3.0
 RETRY_BACKOFF_MULTIPLIER = 1.5
 INCOMPLETE_FILE_EXTENSIONS = (".part", ".ytdl")
 VIDEO_EXTENSIONS = ["mp4", "webm", "mkv", "m4a", "flv", "avi", "mov"]
-CACHE_KEY_VERSION = "hqv3"
+CACHE_KEY_VERSION = "hqv4"
 SUPPORTED_COOKIE_BROWSERS = {
     "brave",
     "chrome",
@@ -219,20 +219,24 @@ class YouTubeDownloader:
 
     @staticmethod
     def _validate_output_path(output_path: str) -> None:
-        """Validate output path for security and correctness"""
+        """Validate output path for security and correctness."""
         if not output_path or not output_path.strip():
             raise ValueError("Output path cannot be empty")
 
         path = Path(output_path)
+        if path.name.strip() == "":
+            raise ValueError("Output path must include a filename")
 
-        # Check for path traversal attempts
+        # Check for path traversal attempts (informational-only; absolute paths are allowed).
         try:
             path.resolve().relative_to(Path.cwd().resolve())
         except ValueError:
-            # Path is outside current directory - this might be intentional, but log it
             pass
 
-        # Ensure parent directory can be created
+    @staticmethod
+    def _ensure_output_parent_dir(output_path: str) -> None:
+        """Create output parent directory after path validation."""
+        path = Path(output_path)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
         except (OSError, PermissionError) as e:
@@ -240,20 +244,19 @@ class YouTubeDownloader:
 
     @staticmethod
     def _build_format_selectors(quality: str) -> list[str]:
-        """Build selectors that prioritize H.264/AAC MP4 compatibility."""
+        """Build selectors with true best-first, then MP4-compatible fallbacks."""
         requested_quality = quality.strip() if quality else ""
-        # Generic HQ selectors often choose AV1/VP9 and force expensive post-transcode.
-        # Normalize these to compatibility-first defaults.
         if requested_quality in {
             "bestvideo*+bestaudio",
             "bv*+ba",
             "bestvideo+bestaudio",
             "bestvideo+bestaudio/best",
         }:
-            requested_quality = ""
+            requested_quality = "bestvideo*+bestaudio/best"
 
         candidates = [
             requested_quality,
+            "bestvideo*+bestaudio/best",
             "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=aac]"
@@ -382,6 +385,140 @@ class YouTubeDownloader:
         if len(cleaned) <= limit:
             return cleaned
         return f"{cleaned[: limit - 3]}..."
+
+    @staticmethod
+    def _js_runtime_name_from_env() -> str | None:
+        raw_name = os.environ.get("YT_DLP_JS_RUNTIME_NAME", "").strip().lower()
+        if raw_name in ("deno", "node"):
+            return raw_name
+        return None
+
+    @staticmethod
+    def _resolve_runtime_executable(runtime_value: str) -> str | None:
+        token = str(runtime_value or "").strip()
+        if not token:
+            return None
+
+        candidate = Path(token).expanduser()
+        if candidate.exists() and candidate.is_file() and os.access(candidate, os.X_OK):
+            try:
+                return str(candidate.resolve())
+            except OSError:
+                return str(candidate)
+
+        has_path_separator = any(sep in token for sep in ("/", "\\", os.sep))
+        if not candidate.is_absolute() and not has_path_separator:
+            located = shutil.which(token)
+            if located and os.access(located, os.X_OK):
+                return located
+
+        return None
+
+    @classmethod
+    def _resolve_fetch_pot_runtime(cls) -> dict | None:
+        if not cls._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True):
+            return None
+
+        runtime_value = os.environ.get("YT_DLP_JS_RUNTIME_PATH", "").strip()
+        if not runtime_value:
+            return None
+
+        runtime_path_str = cls._resolve_runtime_executable(runtime_value)
+        if not runtime_path_str:
+            return None
+
+        runtime_name = cls._js_runtime_name_from_env()
+        if runtime_name is None:
+            name_guess = Path(runtime_path_str).name.lower()
+            if "deno" in name_guess:
+                runtime_name = "deno"
+            elif "node" in name_guess:
+                runtime_name = "node"
+
+        if runtime_name not in ("deno", "node"):
+            return None
+
+        return {
+            "name": runtime_name,
+            "path": runtime_path_str,
+            "js_runtimes": {
+                runtime_name: {
+                    # Keep both forms for compatibility across yt-dlp versions.
+                    "path": runtime_path_str,
+                    "paths": [runtime_path_str],
+                }
+            },
+        }
+
+    @staticmethod
+    def _merge_extractor_args(*extractor_args_sets: dict | None) -> dict:
+        merged: dict = {}
+        for extractor_args in extractor_args_sets:
+            if not isinstance(extractor_args, dict):
+                continue
+            for extractor_name, extractor_options in extractor_args.items():
+                if not isinstance(extractor_options, dict):
+                    merged[extractor_name] = extractor_options
+                    continue
+
+                existing_options = merged.get(extractor_name)
+                if not isinstance(existing_options, dict):
+                    existing_options = {}
+
+                for option_key, option_value in extractor_options.items():
+                    existing_value = existing_options.get(option_key)
+                    if isinstance(existing_value, list) and isinstance(option_value, list):
+                        combined = existing_value + option_value
+                        deduped: list = []
+                        for item in combined:
+                            if item not in deduped:
+                                deduped.append(item)
+                        existing_options[option_key] = deduped
+                    else:
+                        existing_options[option_key] = option_value
+
+                merged[extractor_name] = existing_options
+        return merged
+
+    @classmethod
+    def _fetch_pot_extractor_args(cls) -> dict:
+        return {
+            "youtube": {
+                "fetch_pot": ["auto"],
+                # Keep default variant unless caller overrides.
+                "player_js_variant": ["default"],
+            }
+        }
+
+    @classmethod
+    def _compose_ydl_opts(
+        cls,
+        base_opts: dict,
+        *,
+        extra_opts: dict | None = None,
+        cookiesfrombrowser: tuple[str, ...] | None = None,
+        fetch_pot_runtime: dict | None = None,
+        extractor_args: dict | None = None,
+    ) -> dict:
+        ydl_opts = dict(base_opts)
+        if isinstance(extra_opts, dict):
+            ydl_opts.update(extra_opts)
+
+        if cookiesfrombrowser:
+            ydl_opts["cookiesfrombrowser"] = cookiesfrombrowser
+
+        merged_extractor_args = cls._merge_extractor_args(
+            ydl_opts.get("extractor_args"),
+            extractor_args,
+            cls._fetch_pot_extractor_args() if fetch_pot_runtime else None,
+        )
+        if merged_extractor_args:
+            ydl_opts["extractor_args"] = merged_extractor_args
+
+        if fetch_pot_runtime and isinstance(fetch_pot_runtime.get("js_runtimes"), dict):
+            ydl_opts["js_runtimes"] = fetch_pot_runtime["js_runtimes"]
+
+        return ydl_opts
 
     def _resolve_ffmpeg_location_for_ytdlp(self) -> str | None:
         """Resolve ffmpeg binary location for yt-dlp merge operations."""
@@ -677,32 +814,78 @@ class YouTubeDownloader:
         }
         browser_cookies_enabled = self._is_truthy_env("YT_DLP_ENABLE_BROWSER_COOKIES", default=False)
         cookie_browsers = self._browser_cookie_candidates() if browser_cookies_enabled else []
+        fetch_pot_runtime = self._resolve_fetch_pot_runtime()
 
-        attempts: list[tuple[str, dict]] = [("default", {})]
-        # Single browser attempt: first candidate that has a valid cookiesfrombrowser spec
+        cookiesfrombrowser: tuple[str, ...] | None = None
+        cookie_browser_name: str | None = None
         for cookies_browser in cookie_browsers:
-            cookiesfrombrowser = self._cookiesfrombrowser_option(cookies_browser)
-            if cookiesfrombrowser:
-                attempts.append(
-                    (
-                        f"cookie_{cookies_browser}",
-                        {"cookiesfrombrowser": cookiesfrombrowser},
-                    )
-                )
+            candidate = self._cookiesfrombrowser_option(cookies_browser)
+            if candidate:
+                cookiesfrombrowser = candidate
+                cookie_browser_name = cookies_browser
                 break
-        attempts.extend(
-            [
-                ("mweb", {"extractor_args": {"youtube": {"player_client": ["mweb"]}}}),
+
+        attempts: list[tuple[str, dict]] = []
+        attempts.append(("default", self._compose_ydl_opts(base_opts)))
+        if cookiesfrombrowser and cookie_browser_name:
+            attempts.append(
                 (
-                    "android",
-                    {"extractor_args": {"youtube": {"player_client": ["android"]}}},
+                    f"cookie_{cookie_browser_name}",
+                    self._compose_ydl_opts(base_opts, cookiesfrombrowser=cookiesfrombrowser),
+                )
+            )
+        if fetch_pot_runtime:
+            attempts.append(
+                (
+                    "fetch_pot",
+                    self._compose_ydl_opts(base_opts, fetch_pot_runtime=fetch_pot_runtime),
+                )
+            )
+        if fetch_pot_runtime and cookiesfrombrowser and cookie_browser_name:
+            attempts.append(
+                (
+                    f"cookie_{cookie_browser_name}_fetch_pot",
+                    self._compose_ydl_opts(
+                        base_opts,
+                        cookiesfrombrowser=cookiesfrombrowser,
+                        fetch_pot_runtime=fetch_pot_runtime,
+                    ),
+                )
+            )
+        attempts.append(
+            (
+                "mweb",
+                self._compose_ydl_opts(
+                    base_opts,
+                    extractor_args={"youtube": {"player_client": ["mweb"]}},
                 ),
-            ]
+            )
+        )
+        attempts.append(
+            (
+                "android",
+                self._compose_ydl_opts(
+                    base_opts,
+                    extractor_args={"youtube": {"player_client": ["android"]}},
+                ),
+            )
+        )
+
+        self._emit_debug_event(
+            "auth_debug",
+            {
+                "event": "extract_attempt_plan",
+                "browser_cookies_enabled": browser_cookies_enabled,
+                "cookie_browser": cookie_browser_name,
+                "fetch_pot_enabled": self._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True),
+                "fetch_pot_runtime_available": bool(fetch_pot_runtime),
+                "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
+                "fetch_pot_runtime_path": fetch_pot_runtime.get("path") if fetch_pot_runtime else None,
+            },
         )
 
         attempt_errors: list[str] = []
-        for attempt_name, extra_opts in attempts:
-            ydl_opts = {**base_opts, **extra_opts}
+        for attempt_name, ydl_opts in attempts:
             self._emit_debug_event(
                 "auth_debug",
                 {
@@ -710,6 +893,8 @@ class YouTubeDownloader:
                     "attempt": attempt_name,
                     "cookiefile": bool(ydl_opts.get("cookiefile")),
                     "cookiesfrombrowser": ydl_opts.get("cookiesfrombrowser"),
+                    "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
+                    "js_runtimes": bool(ydl_opts.get("js_runtimes")),
                     "extractor_args": ydl_opts.get("extractor_args"),
                 },
             )
@@ -955,6 +1140,299 @@ class YouTubeDownloader:
                 except OSError:
                     pass
 
+    @staticmethod
+    def _is_webm_video_codec(codec: str | None) -> bool:
+        normalized = str(codec or "").strip().lower()
+        if normalized in ("", "none"):
+            return True
+        return normalized.startswith("vp8") or normalized.startswith("vp9") or normalized.startswith("av1")
+
+    @staticmethod
+    def _is_webm_audio_codec(codec: str | None) -> bool:
+        normalized = str(codec or "").strip().lower()
+        if normalized in ("", "none"):
+            return True
+        return normalized in ("opus", "vorbis")
+
+    @staticmethod
+    def _safe_unlink(path: Path) -> None:
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            pass
+
+    @staticmethod
+    def _temp_processing_extension(source_path: Path) -> str:
+        ext = source_path.suffix.lower()
+        if ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm"):
+            return ext
+        return ".mkv"
+
+    def _remux_copy(self, input_path: Path, output_path: Path, output_format: str | None = None) -> bool:
+        ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
+        if not ffmpeg_path:
+            print(
+                "FFmpeg validation error: FFmpeg not found in FFMPEG_PATH or PATH",
+                file=sys.stderr,
+            )
+            return False
+
+        temp_output = output_path.with_name(f"{output_path.stem}.remux{output_path.suffix}")
+        self._safe_unlink(temp_output)
+
+        cmd = [
+            ffmpeg_path,
+            "-i",
+            str(input_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+        ]
+
+        if output_format:
+            cmd.extend(["-f", output_format])
+        if output_path.suffix.lower() == ".mp4":
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.extend([str(temp_output), "-y"])
+
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                check=True,
+                timeout=3600,
+            )
+            if not temp_output.exists() or temp_output.stat().st_size == 0:
+                print("Container remux produced no output", file=sys.stderr)
+                return False
+            temp_output.replace(output_path)
+            return True
+        except subprocess.TimeoutExpired:
+            print("Container remux timed out after 1 hour", file=sys.stderr)
+            return False
+        except subprocess.CalledProcessError as e:
+            error_output = e.stderr.decode("utf-8", errors="replace") if e.stderr else str(e)
+            print(f"Container remux error: {error_output}", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"Container remux failed: {e}", file=sys.stderr)
+            return False
+        finally:
+            self._safe_unlink(temp_output)
+
+    def _should_disable_post_compat_normalization(self) -> bool:
+        return self._is_truthy_env("YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION", default=False)
+
+    @staticmethod
+    def _native_output_path(source_path: Path, requested_output_path: Path) -> Path:
+        source_ext = source_path.suffix.lower()
+        if not source_ext or requested_output_path.suffix.lower() == source_ext:
+            return requested_output_path
+        return requested_output_path.with_suffix(source_path.suffix)
+
+    def _finalize_without_normalization(
+        self,
+        source_path: Path,
+        requested_output_path: Path,
+    ) -> tuple[bool, Path | None, str | None]:
+        if not source_path.exists() or not source_path.is_file():
+            return False, None, "Downloaded output file not found"
+
+        final_path = self._native_output_path(source_path, requested_output_path)
+        source_ext = source_path.suffix.lower()
+        requested_ext = requested_output_path.suffix.lower()
+        final_ext = final_path.suffix.lower()
+
+        try:
+            if source_path.resolve() == final_path.resolve():
+                self._emit_debug_event(
+                    "quality_debug",
+                    {
+                        "event": "output_passthrough",
+                        "action": "source_equals_final",
+                        "source_ext": source_ext,
+                        "requested_ext": requested_ext,
+                        "final_ext": final_ext,
+                        "requested_path": str(requested_output_path),
+                        "final_path": str(final_path),
+                        "post_compat_normalization_disabled": True,
+                    },
+                )
+                return True, final_path, None
+        except OSError:
+            pass
+
+        try:
+            shutil.copy2(str(source_path), str(final_path))
+            self._emit_debug_event(
+                "quality_debug",
+                {
+                    "event": "output_passthrough",
+                    "action": "copy_native",
+                    "source_ext": source_ext,
+                    "requested_ext": requested_ext,
+                    "final_ext": final_ext,
+                    "requested_path": str(requested_output_path),
+                    "final_path": str(final_path),
+                    "post_compat_normalization_disabled": True,
+                },
+            )
+            return True, final_path, None
+        except (OSError, PermissionError) as e:
+            return False, final_path, f"Failed to copy downloaded output to destination: {str(e)}"
+
+    def _normalize_output_file(
+        self,
+        source_path: Path,
+        output_path: Path,
+        selected_format: dict | None,
+    ) -> tuple[bool, str | None]:
+        """Normalize container/codec so output extension matches actual file."""
+        source_ext = source_path.suffix.lower()
+        target_ext = output_path.suffix.lower()
+
+        if target_ext == ".mkv":
+            if not self._remux_copy(source_path, output_path, output_format="matroska"):
+                return False, "Failed to remux downloaded file into MKV container."
+            self._emit_debug_event(
+                "quality_debug",
+                {
+                    "event": "output_normalized",
+                    "action": "remux_mkv",
+                    "source_ext": source_ext,
+                    "target_ext": target_ext,
+                },
+            )
+            return True, None
+
+        if target_ext == ".webm":
+            source_video_codec, source_audio_codec = self._probe_primary_stream_codecs(source_path)
+            if not self._is_webm_video_codec(source_video_codec) or not self._is_webm_audio_codec(source_audio_codec):
+                return (
+                    False,
+                    "Requested .webm output but downloaded streams are not WebM-compatible codecs "
+                    "(requires VP8/VP9/AV1 video with Opus/Vorbis audio).",
+                )
+            if not self._remux_copy(source_path, output_path, output_format="webm"):
+                return False, "Failed to remux downloaded file into WebM container."
+            self._emit_debug_event(
+                "quality_debug",
+                {
+                    "event": "output_normalized",
+                    "action": "remux_webm",
+                    "source_ext": source_ext,
+                    "target_ext": target_ext,
+                },
+            )
+            return True, None
+
+        if target_ext == ".mp4":
+            source_video_codec, source_audio_codec = self._probe_primary_stream_codecs(source_path)
+            force_compat_transcode = self._is_truthy_env("YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE", default=False)
+            requires_compat_transcode = force_compat_transcode or self._requires_mp4_compatibility_transcode(
+                source_path,
+                output_path,
+                selected_format,
+                source_video_codec=source_video_codec,
+                source_audio_codec=source_audio_codec,
+            )
+            self._emit_debug_event(
+                "quality_debug",
+                {
+                    "event": "mp4_compat_probe",
+                    "input_path": str(source_path),
+                    "source_video_codec": source_video_codec,
+                    "source_audio_codec": source_audio_codec,
+                    "selected_format": selected_format,
+                    "force_mp4_compat_transcode": force_compat_transcode,
+                    "requires_mp4_compat_transcode": requires_compat_transcode,
+                },
+            )
+
+            if requires_compat_transcode:
+                self._emit_debug_event(
+                    "quality_debug",
+                    {
+                        "event": "mp4_compat_transcode",
+                        "input_path": str(source_path),
+                        "output_path": str(output_path),
+                        "source_ext": source_ext,
+                        "source_video_codec": source_video_codec,
+                        "source_audio_codec": source_audio_codec,
+                        "selected_format": selected_format,
+                    },
+                )
+                if not self._transcode_to_quicktime_mp4(source_path, output_path):
+                    return (
+                        False,
+                        "Downloaded video uses codecs that are not QuickTime-compatible/MP4-compatible and "
+                        "automatic MP4 conversion failed.",
+                    )
+                self._emit_debug_event(
+                    "quality_debug",
+                    {
+                        "event": "output_normalized",
+                        "action": "transcode_mp4",
+                        "source_ext": source_ext,
+                        "target_ext": target_ext,
+                    },
+                )
+                return True, None
+
+            if source_ext == ".mp4":
+                try:
+                    shutil.copy2(str(source_path), str(output_path))
+                    self._emit_debug_event(
+                        "quality_debug",
+                        {
+                            "event": "output_normalized",
+                            "action": "copy_mp4",
+                            "source_ext": source_ext,
+                            "target_ext": target_ext,
+                        },
+                    )
+                    return True, None
+                except (OSError, PermissionError) as e:
+                    return False, f"Failed to copy file to requested location: {str(e)}"
+
+            if not self._remux_copy(source_path, output_path, output_format="mp4"):
+                return False, "Failed to remux downloaded file into MP4 container."
+            self._emit_debug_event(
+                "quality_debug",
+                {
+                    "event": "output_normalized",
+                    "action": "remux_mp4",
+                    "source_ext": source_ext,
+                    "target_ext": target_ext,
+                },
+            )
+            return True, None
+
+        if source_ext == target_ext:
+            try:
+                shutil.copy2(str(source_path), str(output_path))
+                self._emit_debug_event(
+                    "quality_debug",
+                    {
+                        "event": "output_normalized",
+                        "action": "copy_same_extension",
+                        "source_ext": source_ext,
+                        "target_ext": target_ext,
+                    },
+                )
+                return True, None
+            except (OSError, PermissionError) as e:
+                return False, f"Failed to copy file to requested location: {str(e)}"
+
+        return (
+            False,
+            f"Unsupported output format '{target_ext or '(none)'}'. Please save as .mp4, .mkv, or .webm.",
+        )
+
     def cut_video(
         self,
         input_path: str,
@@ -972,6 +1450,7 @@ class YouTubeDownloader:
         # Validate output path
         try:
             self._validate_output_path(output_path)
+            self._ensure_output_parent_dir(output_path)
         except ValueError as e:
             print(f"Invalid output path: {e}", file=sys.stderr)
             return False
@@ -1050,6 +1529,7 @@ class YouTubeDownloader:
         sections: list[tuple[int | None, int | None]],
         output_path: str,
         video_id: str,
+        temp_extension: str | None = None,
     ) -> bool:
         """Cut multiple sections from video and concatenate them"""
         # Validate input path
@@ -1061,6 +1541,7 @@ class YouTubeDownloader:
         # Validate output path
         try:
             self._validate_output_path(output_path)
+            self._ensure_output_parent_dir(output_path)
         except ValueError as e:
             print(f"Invalid output path: {e}", file=sys.stderr)
             return False
@@ -1077,11 +1558,14 @@ class YouTubeDownloader:
         temp_dir = self._get_temp_dir()
         section_files: list[Path] = []
         concat_file: Path | None = None
+        section_ext = (temp_extension or Path(input_path).suffix or ".mkv").strip()
+        if not section_ext.startswith("."):
+            section_ext = f".{section_ext}"
 
         try:
             # Cut each section to a temporary file
             for index, (start_time, end_time) in enumerate(sections):
-                section_output = temp_dir / f"{video_id}_section_{index}.mp4"
+                section_output = temp_dir / f"{video_id}_section_{index}{section_ext}"
 
                 # Cut this section
                 if not self.cut_video(str(input_path), str(section_output), start_time, end_time):
@@ -1188,6 +1672,7 @@ class YouTubeDownloader:
         # Validate output path early
         try:
             self._validate_output_path(output_path)
+            self._ensure_output_parent_dir(output_path)
         except ValueError as e:
             return DownloadResult(
                 success=False,
@@ -1239,6 +1724,8 @@ class YouTubeDownloader:
         allow_low_quality = self._is_truthy_env("YT_DLP_ALLOW_LOW_QUALITY_FALLBACK", default=False)
         browser_cookies_enabled = self._is_truthy_env("YT_DLP_ENABLE_BROWSER_COOKIES", default=False)
         cookie_browsers = self._browser_cookie_candidates() if browser_cookies_enabled else []
+        fetch_pot_enabled = self._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True)
+        fetch_pot_runtime = self._resolve_fetch_pot_runtime()
         ffmpeg_location_for_ytdlp = self._resolve_ffmpeg_location_for_ytdlp()
         self._emit_debug_event(
             "quality_debug",
@@ -1249,6 +1736,10 @@ class YouTubeDownloader:
                 "allow_low_quality_fallback": allow_low_quality,
                 "browser_cookies_enabled": browser_cookies_enabled,
                 "cookie_browsers": cookie_browsers,
+                "fetch_pot_enabled": fetch_pot_enabled,
+                "fetch_pot_runtime_available": bool(fetch_pot_runtime),
+                "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
+                "fetch_pot_runtime_path": fetch_pot_runtime.get("path") if fetch_pot_runtime else None,
                 "ffmpeg_location_for_ytdlp": ffmpeg_location_for_ytdlp,
             },
         )
@@ -1310,26 +1801,56 @@ class YouTubeDownloader:
             # The video_id is already validated from YouTube, so it should be safe
             download_output_path = str(temp_dir / f"{cache_video_id}.%(ext)s")
 
-            # Try highest quality first, then single detected-browser cookies, then fallbacks.
-            attempt_profiles = [
-                {
-                    "name": "hq",
-                    "selectors": self._build_format_selectors(quality),
-                    "extra_opts": {},
-                },
-            ]
+            selected_cookie_browser: str | None = None
+            selected_cookiesfrombrowser: tuple[str, ...] | None = None
             if browser_cookies_enabled:
                 for cookies_browser in cookie_browsers:
                     cookiesfrombrowser = self._cookiesfrombrowser_option(cookies_browser)
                     if cookiesfrombrowser:
-                        attempt_profiles.append(
-                            {
-                                "name": f"hq_cookie_{cookies_browser}",
-                                "selectors": self._build_format_selectors(quality),
-                                "extra_opts": {"cookiesfrombrowser": cookiesfrombrowser},
-                            }
-                        )
+                        selected_cookie_browser = cookies_browser
+                        selected_cookiesfrombrowser = cookiesfrombrowser
                         break
+
+            # Try highest quality first, then auth/fetch_pot variants, then fallbacks.
+            attempt_profiles = [
+                {
+                    "name": "hq_best",
+                    "selectors": self._build_format_selectors(quality),
+                    "cookiesfrombrowser": None,
+                    "fetch_pot": False,
+                    "extractor_args": None,
+                },
+            ]
+            if selected_cookie_browser and selected_cookiesfrombrowser:
+                attempt_profiles.append(
+                    {
+                        "name": "hq_best_cookie",
+                        "selectors": self._build_format_selectors(quality),
+                        "cookiesfrombrowser": selected_cookiesfrombrowser,
+                        "fetch_pot": False,
+                        "extractor_args": None,
+                    }
+                )
+            if fetch_pot_enabled and fetch_pot_runtime:
+                attempt_profiles.append(
+                    {
+                        "name": "hq_best_fetch_pot",
+                        "selectors": self._build_format_selectors(quality),
+                        "cookiesfrombrowser": None,
+                        "fetch_pot": True,
+                        "extractor_args": None,
+                    }
+                )
+            if fetch_pot_enabled and fetch_pot_runtime and selected_cookie_browser and selected_cookiesfrombrowser:
+                attempt_profiles.append(
+                    {
+                        "name": "hq_best_cookie_fetch_pot",
+                        "selectors": self._build_format_selectors(quality),
+                        "cookiesfrombrowser": selected_cookiesfrombrowser,
+                        "fetch_pot": True,
+                        "extractor_args": None,
+                    }
+                )
 
             # Some videos block default web client HQ streams but still allow adaptive
             # formats via mweb client without dropping to low progressive quality.
@@ -1337,13 +1858,9 @@ class YouTubeDownloader:
                 {
                     "name": "hq_mweb",
                     "selectors": self._build_format_selectors(quality),
-                    "extra_opts": {
-                        "extractor_args": {
-                            "youtube": {
-                                "player_client": ["mweb"],
-                            }
-                        }
-                    },
+                    "cookiesfrombrowser": None,
+                    "fetch_pot": False,
+                    "extractor_args": {"youtube": {"player_client": ["mweb"]}},
                 }
             )
 
@@ -1351,13 +1868,9 @@ class YouTubeDownloader:
                 {
                     "name": "restricted_progressive",
                     "selectors": self._build_restricted_format_selectors(),
-                    "extra_opts": {
-                        "extractor_args": {
-                            "youtube": {
-                                "player_client": ["web", "android"],
-                            }
-                        }
-                    },
+                    "cookiesfrombrowser": None,
+                    "fetch_pot": False,
+                    "extractor_args": {"youtube": {"player_client": ["web", "android"]}},
                 }
             )
 
@@ -1369,7 +1882,10 @@ class YouTubeDownloader:
 
             for profile in attempt_profiles:
                 format_selectors = profile["selectors"]
-                extra_opts = profile["extra_opts"]
+                profile_name = str(profile.get("name") or "unknown_profile")
+                profile_cookies = profile.get("cookiesfrombrowser")
+                profile_fetch_pot = bool(profile.get("fetch_pot"))
+                profile_extractor_args = profile.get("extractor_args")
 
                 for format_selector in format_selectors:
                     progress_tracker.selected_format = None
@@ -1378,8 +1894,11 @@ class YouTubeDownloader:
                         "quality_debug",
                         {
                             "event": "attempt",
-                            "profile": profile.get("name"),
+                            "profile": profile_name,
                             "selector": format_selector,
+                            "cookiesfrombrowser": profile_cookies,
+                            "fetch_pot": profile_fetch_pot,
+                            "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
                         },
                     )
                     self._cleanup_incomplete_download_files(temp_dir, cache_video_id)
@@ -1405,23 +1924,28 @@ class YouTubeDownloader:
                     if ffmpeg_location_for_ytdlp:
                         base_opts["ffmpeg_location"] = ffmpeg_location_for_ytdlp
 
-                    if extra_opts:
-                        base_opts.update(extra_opts)
-
                     # Only skip certificate check if explicitly enabled via environment variable
                     if skip_cert_check:
                         base_opts["nocheckcertificate"] = True
 
+                    fetch_pot_runtime_for_attempt = fetch_pot_runtime if profile_fetch_pot else None
+                    composed_base_opts = self._compose_ydl_opts(
+                        base_opts,
+                        cookiesfrombrowser=profile_cookies if isinstance(profile_cookies, tuple) else None,
+                        fetch_pot_runtime=fetch_pot_runtime_for_attempt,
+                        extractor_args=profile_extractor_args if isinstance(profile_extractor_args, dict) else None,
+                    )
+
                     # For live streams, handle download options
                     if video_info.is_live and not download_from_start:
                         ydl_opts = {
-                            **base_opts,
+                            **composed_base_opts,
                             "live_recording_duration": 3600,  # 1 hour max for live
                             "live_from_start": False,
                         }
                     else:
                         ydl_opts = {
-                            **base_opts,
+                            **composed_base_opts,
                             "live_from_start": download_from_start,
                         }
 
@@ -1438,7 +1962,6 @@ class YouTubeDownloader:
                     except yt_dlp.utils.DownloadError as e:
                         last_error = e
                         error_msg = str(e)
-                        profile_name = profile.get("name") or "unknown_profile"
                         profile_errors[profile_name] = self._truncate_error_message(error_msg)
                         self._emit_debug_event(
                             "quality_debug",
@@ -1475,7 +1998,6 @@ class YouTubeDownloader:
                         continue
                     except Exception as e:
                         last_error = e
-                        profile_name = profile.get("name") or "unknown_profile"
                         profile_errors[profile_name] = self._truncate_error_message(str(e))
                         self._emit_debug_event(
                             "quality_debug",
@@ -1590,13 +2112,13 @@ class YouTubeDownloader:
                                 (
                                     " (cookie attempt errors: "
                                     + "; ".join(
-                                        f"{browser}: {profile_errors.get(f'hq_cookie_{browser}', 'unknown')}"
-                                        for browser in cookie_browsers
-                                        if profile_errors.get(f"hq_cookie_{browser}")
+                                        f"{name}: {message}"
+                                        for name, message in profile_errors.items()
+                                        if name.startswith("hq_best_cookie")
                                     )
                                     + "). "
                                 )
-                                if any(profile_errors.get(f"hq_cookie_{browser}") for browser in cookie_browsers)
+                                if any(name.startswith("hq_best_cookie") for name in profile_errors)
                                 else ". "
                             )
                             + "Try using a browser where you're signed in (cookies used automatically), "
@@ -1662,21 +2184,13 @@ class YouTubeDownloader:
                     video_info=video_info,
                 )
 
-        # Process the video (cut or copy)
-        try:
-            output_path_obj = Path(output_path)
-            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        except (OSError, PermissionError) as e:
-            return DownloadResult(
-                success=False,
-                file_path=None,
-                file_size=None,
-                error_message=f"Failed to create output directory: {str(e)}",
-                video_info=video_info,
-            )
+        # Process into temp/intermediate source, then normalize to requested output format.
+        output_path_obj = Path(output_path)
+
+        processing_source = original_file_path
+        temp_processing_file: Path | None = None
 
         if needs_cut:
-            # Verify original file exists before cutting
             if not original_file_path.exists():
                 return DownloadResult(
                     success=False,
@@ -1686,9 +2200,17 @@ class YouTubeDownloader:
                     video_info=video_info,
                 )
 
+            cut_ext = self._temp_processing_extension(original_file_path)
+            temp_processing_file = temp_dir / f"{cache_video_id}_section_work{cut_ext}"
+            self._safe_unlink(temp_processing_file)
+
             if use_sections:
-                # Cut and concatenate multiple sections
-                if not self.cut_and_concatenate_sections(str(original_file_path), sections, output_path, video_info.id):
+                if not self.cut_and_concatenate_sections(
+                    str(original_file_path),
+                    sections or [],
+                    str(temp_processing_file),
+                    video_info.id,
+                ):
                     return DownloadResult(
                         success=False,
                         file_path=None,
@@ -1697,8 +2219,7 @@ class YouTubeDownloader:
                         video_info=video_info,
                     )
             else:
-                # Cut single section
-                if not self.cut_video(str(original_file_path), output_path, start_time, end_time):
+                if not self.cut_video(str(original_file_path), str(temp_processing_file), start_time, end_time):
                     return DownloadResult(
                         success=False,
                         file_path=None,
@@ -1707,8 +2228,7 @@ class YouTubeDownloader:
                         video_info=video_info,
                     )
 
-            # Verify the cut file was created
-            if not Path(output_path).exists():
+            if not temp_processing_file.exists() or not self._is_valid_video_file(temp_processing_file):
                 return DownloadResult(
                     success=False,
                     file_path=None,
@@ -1717,7 +2237,6 @@ class YouTubeDownloader:
                     video_info=video_info,
                 )
 
-            # Verify original file still exists in temp after cutting
             if not original_file_path.exists() or not self._is_valid_video_file(original_file_path):
                 return DownloadResult(
                     success=False,
@@ -1727,85 +2246,38 @@ class YouTubeDownloader:
                     video_info=video_info,
                 )
 
-            final_file_path = output_path
-            # Original file in temp directory is kept for future use (caching)
+            processing_source = temp_processing_file
+
+        if self._should_disable_post_compat_normalization():
+            normalized, finalized_path, normalize_error = self._finalize_without_normalization(
+                processing_source,
+                output_path_obj,
+            )
+            final_path_obj = finalized_path or output_path_obj
         else:
-            # No cutting needed, copy file from temp to user's requested location
-            # Keep original in temp for caching
-            try:
-                shutil.copy2(str(original_file_path), output_path)
-                final_file_path = output_path
-                # Original file in temp directory is kept for future use (caching)
-            except (OSError, PermissionError) as e:
-                return DownloadResult(
-                    success=False,
-                    file_path=None,
-                    file_size=None,
-                    error_message=f"Failed to copy file to requested location: {str(e)}",
-                    video_info=video_info,
-                )
+            normalized, normalize_error = self._normalize_output_file(
+                processing_source,
+                output_path_obj,
+                progress_tracker.selected_format,
+            )
+            final_path_obj = output_path_obj
 
-        final_path_obj = Path(final_file_path)
-        # When needs_cut=True, transcode_input and final_path_obj are the same
-        # cut output path. _transcode_to_quicktime_mp4 handles same src/dst by
-        # writing a .qtcompat temp file, then replacing final_path_obj.
-        transcode_input = final_path_obj if needs_cut else original_file_path
-        source_video_codec = None
-        source_audio_codec = None
-        if final_path_obj.suffix.lower() == ".mp4" and transcode_input.suffix.lower() in (".mp4", ".m4v", ".mov"):
-            source_video_codec, source_audio_codec = self._probe_primary_stream_codecs(transcode_input)
-            self._emit_debug_event(
-                "quality_debug",
-                {
-                    "event": "mp4_compat_probe",
-                    "input_path": str(transcode_input),
-                    "source_video_codec": source_video_codec,
-                    "source_audio_codec": source_audio_codec,
-                    "selected_format": progress_tracker.selected_format,
-                },
+        if temp_processing_file:
+            self._safe_unlink(temp_processing_file)
+
+        if not normalized:
+            self._safe_unlink(output_path_obj)
+            if final_path_obj != output_path_obj:
+                self._safe_unlink(final_path_obj)
+            return DownloadResult(
+                success=False,
+                file_path=None,
+                file_size=None,
+                error_message=normalize_error or "Failed to finalize output file",
+                video_info=video_info,
             )
 
-        enable_mp4_compat_transcode = self._is_truthy_env("YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE", default=False)
-        requires_mp4_compat = enable_mp4_compat_transcode and self._requires_mp4_compatibility_transcode(
-            transcode_input,
-            final_path_obj,
-            progress_tracker.selected_format,
-            source_video_codec=source_video_codec,
-            source_audio_codec=source_audio_codec,
-        )
-        if requires_mp4_compat:
-            self._emit_debug_event(
-                "quality_debug",
-                {
-                    "event": "mp4_compat_transcode",
-                    "input_path": str(transcode_input),
-                    "output_path": str(final_path_obj),
-                    "source_ext": transcode_input.suffix.lower(),
-                    "source_video_codec": source_video_codec,
-                    "source_audio_codec": source_audio_codec,
-                    "selected_format": progress_tracker.selected_format,
-                },
-            )
-            if not self._transcode_to_quicktime_mp4(transcode_input, final_path_obj):
-                return DownloadResult(
-                    success=False,
-                    file_path=None,
-                    file_size=None,
-                    error_message=(
-                        "Downloaded video uses codecs that are not QuickTime-compatible and "
-                        "automatic MP4 compatibility conversion failed."
-                    ),
-                    video_info=video_info,
-                )
-        elif not enable_mp4_compat_transcode:
-            self._emit_debug_event(
-                "quality_debug",
-                {
-                    "event": "mp4_compat_transcode_disabled",
-                    "input_path": str(transcode_input),
-                    "output_path": str(final_path_obj),
-                },
-            )
+        final_file_path = str(final_path_obj)
 
         # Verify the cached file still exists in temp directory
         cached_file_path_str = None
@@ -1941,35 +2413,75 @@ def main():
             # Process local file
             success = False
             error_message = None
+            source_path = Path(input_path)
+            output_path_obj = Path(output_path)
+            final_output_path_obj = output_path_obj
 
-            if sections:
-                # Use a dummy video ID for temp files
-                video_id = "local_video"
-                success = downloader.cut_and_concatenate_sections(input_path, sections, output_path, video_id)
-                if not success:
-                    error_message = "Failed to cut and concatenate sections"
+            if not source_path.exists() or not source_path.is_file():
+                success = False
+                error_message = "Input file not found"
             else:
-                # Just copy if no sections (or maybe we shouldn't allow this? But for completeness)
-                # If no sections are defined, we probably just want to copy the file or it's a no-op?
-                # The UI enforces sections usually. If sections is empty, maybe we treat it as "whole video"?
-                # But for now let's assume if no sections, we just copy.
                 try:
-                    shutil.copy2(input_path, output_path)
-                    success = True
-                except Exception as e:
+                    downloader._validate_output_path(output_path)
+                    downloader._ensure_output_parent_dir(output_path)
+                except ValueError as e:
                     success = False
-                    error_message = f"Failed to copy file: {str(e)}"
+                    error_message = f"Invalid output path: {str(e)}"
+                else:
+                    normalize_source = source_path
+                    temp_processing_file = None
+                    final_output_path_obj = output_path_obj
+                    try:
+                        if sections:
+                            video_id = "local_video"
+                            temp_ext = downloader._temp_processing_extension(source_path)
+                            temp_processing_file = downloader._get_temp_dir() / f"{video_id}_section_work{temp_ext}"
+                            downloader._safe_unlink(temp_processing_file)
+                            success = downloader.cut_and_concatenate_sections(
+                                str(source_path),
+                                sections,
+                                str(temp_processing_file),
+                                video_id,
+                                temp_extension=temp_ext,
+                            )
+                            if not success:
+                                error_message = "Failed to cut and concatenate sections"
+                            else:
+                                normalize_source = temp_processing_file
+
+                        if success or not sections:
+                            if downloader._should_disable_post_compat_normalization():
+                                success, finalized_path, normalize_error = downloader._finalize_without_normalization(
+                                    normalize_source,
+                                    output_path_obj,
+                                )
+                                final_output_path_obj = finalized_path or output_path_obj
+                            else:
+                                success, normalize_error = downloader._normalize_output_file(
+                                    normalize_source,
+                                    output_path_obj,
+                                    selected_format=None,
+                                )
+                                final_output_path_obj = output_path_obj
+                            if not success:
+                                downloader._safe_unlink(output_path_obj)
+                                if final_output_path_obj != output_path_obj:
+                                    downloader._safe_unlink(final_output_path_obj)
+                                error_message = normalize_error or "Failed to finalize output file"
+                    finally:
+                        if temp_processing_file is not None:
+                            downloader._safe_unlink(temp_processing_file)
 
             # Get file size if successful
             file_size = 0
-            if success and os.path.exists(output_path):
-                file_size = os.path.getsize(output_path)
+            if success and final_output_path_obj.exists():
+                file_size = final_output_path_obj.stat().st_size
 
             sys.stdout.write(
                 json.dumps(
                     {
                         "success": success,
-                        "file_path": output_path if success else None,
+                        "file_path": str(final_output_path_obj) if success else None,
                         "file_size": file_size,
                         "error_message": error_message,
                     }

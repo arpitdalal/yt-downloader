@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type DownloadProgressData,
 	tauriAPI,
@@ -20,6 +20,7 @@ export default function App() {
 	const [localFile, setLocalFile] = useState<string | null>(null);
 	const [sections, setSections] = useState<Section[]>([{ start: "", end: "" }]);
 	const [status, setStatus] = useState<DownloadStatus>("idle");
+	const statusRef = useRef<DownloadStatus>("idle");
 	const [progress, setProgress] = useState(0);
 	const [error, setError] = useState<string | null>(null);
 	const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
@@ -27,45 +28,51 @@ export default function App() {
 	const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus>({
 		connected: false,
 		detectedBrowser: null,
+		jsRuntimeAvailable: false,
+		jsRuntimeName: null,
+		fetchPotEnabled: true,
 	});
 
-	// Set up progress listener
+	useEffect(() => {
+		statusRef.current = status;
+	}, [status]);
+
+	// Set up progress listener once; use a ref to avoid resubscription races.
 	useEffect(() => {
 		tauriAPI.onDownloadProgress((data: DownloadProgressData) => {
-			if (status === "downloading") {
-				setProgress((previous) => {
-					if (
-						typeof data.percent === "number" &&
-						Number.isFinite(data.percent)
-					) {
-						return Math.min(99.5, Math.max(previous, data.percent));
-					}
-
-					if (
-						typeof data.downloadedBytes === "number" &&
-						typeof data.totalBytes === "number" &&
-						data.totalBytes > 0
-					) {
-						const derived = (data.downloadedBytes / data.totalBytes) * 100;
-						return Math.min(99.5, Math.max(previous, derived));
-					}
-
-					if (
-						typeof data.downloadedBytes === "number" &&
-						data.downloadedBytes > 0
-					) {
-						return Math.min(95, previous + 0.8);
-					}
-
-					return previous;
-				});
+			if (statusRef.current !== "downloading") {
+				return;
 			}
+
+			setProgress((previous) => {
+				if (typeof data.percent === "number" && Number.isFinite(data.percent)) {
+					return Math.min(99.5, Math.max(previous, data.percent));
+				}
+
+				if (
+					typeof data.downloadedBytes === "number" &&
+					typeof data.totalBytes === "number" &&
+					data.totalBytes > 0
+				) {
+					const derived = (data.downloadedBytes / data.totalBytes) * 100;
+					return Math.min(99.5, Math.max(previous, derived));
+				}
+
+				if (
+					typeof data.downloadedBytes === "number" &&
+					data.downloadedBytes > 0
+				) {
+					return Math.min(95, previous + 0.8);
+				}
+
+				return previous;
+			});
 		});
 
 		return () => {
 			tauriAPI.removeDownloadProgressListener();
 		};
-	}, [status]);
+	}, []);
 
 	const refreshYouTubeAuthStatus = useCallback(async () => {
 		try {
@@ -92,6 +99,9 @@ export default function App() {
 
 		// Map technical errors to user-friendly messages
 		if (message.includes("Invalid input")) {
+			if (message.toLowerCase().includes("input file not found")) {
+				return "The selected file was not found. It may have been moved or deleted.";
+			}
 			if (message.includes("URL")) {
 				return "Please enter a valid YouTube URL.";
 			}
@@ -120,7 +130,16 @@ export default function App() {
 		}
 		const requiresYouTubeSignIn = isYouTubeAuthError(message);
 		if (requiresYouTubeSignIn) {
-			return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
+			if (!youtubeAuth.jsRuntimeAvailable && youtubeAuth.fetchPotEnabled) {
+				return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again. If it still fails, install/update the app runtime bundle (JS runtime missing).";
+			}
+			return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again.";
+		}
+		if (
+			message.toLowerCase().includes("po token") ||
+			message.toLowerCase().includes("pot")
+		) {
+			return "YouTube verification failed while requesting PO token. Try again; if this persists, update app/runtime and ensure network allows YouTube JS requests.";
 		}
 		if (message.includes("High-quality stream is available up to")) {
 			return message;
@@ -338,8 +357,12 @@ export default function App() {
 				});
 
 				setStatus("completed");
+				const requestedPath = dialogResult.filePath;
+				const finalPath = result.filePath || requestedPath;
 				setSuccessMessage(
-					`Processing completed! File saved to: ${result.filePath}`,
+					finalPath === requestedPath
+						? `Processing completed! File saved to: ${finalPath}`
+						: `Processing completed! File saved to: ${requestedPath} (finalized at: ${finalPath})`,
 				);
 			} else {
 				// Handle YouTube download
@@ -390,8 +413,11 @@ export default function App() {
 
 				setStatus("completed");
 				setProgress(100);
+				const finalPath = result.filePath || savePath;
 				setSuccessMessage(
-					`Download completed! File saved to: ${result.filePath}`,
+					finalPath === savePath
+						? `Download completed! File saved to: ${finalPath}`
+						: `Download completed! File saved to: ${savePath} (finalized at: ${finalPath})`,
 				);
 			}
 
@@ -452,9 +478,16 @@ export default function App() {
 						YouTube
 					</h2>
 					<p className="text-sm text-gray-600">
-						{youtubeAuth.connected && youtubeAuth.detectedBrowser
-							? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading)`
-							: "No supported browser detected. Install Chrome or Firefox and sign in to YouTube for best results."}
+						{youtubeAuth.detectedBrowser
+							? youtubeAuth.connected
+								? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading).`
+								: `Browser detected: ${youtubeAuth.detectedBrowser} (cookie auth currently disabled by environment).`
+							: "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results."}{" "}
+						{youtubeAuth.fetchPotEnabled
+							? youtubeAuth.jsRuntimeAvailable
+								? `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`
+								: "JS runtime not detected (fetch_pot disabled for this run)."
+							: "fetch_pot is disabled by environment."}
 					</p>
 				</div>
 

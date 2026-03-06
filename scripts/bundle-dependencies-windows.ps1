@@ -7,6 +7,7 @@ Write-Host "Bundling dependencies for Windows (Tauri resources)..." -ForegroundC
 $resourcesRoot = "src-tauri/resources"
 $pythonDir = Join-Path $resourcesRoot "python"
 $ffmpegDir = Join-Path $resourcesRoot "ffmpeg"
+$jsRuntimeDir = Join-Path $resourcesRoot "jsruntime"
 
 function Assert-Sha256 {
     param (
@@ -25,9 +26,11 @@ function Assert-Sha256 {
 
 if (Test-Path $pythonDir) { Remove-Item -Recurse -Force $pythonDir }
 if (Test-Path $ffmpegDir) { Remove-Item -Recurse -Force $ffmpegDir }
+if (Test-Path $jsRuntimeDir) { Remove-Item -Recurse -Force $jsRuntimeDir }
 
 New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
+New-Item -ItemType Directory -Force -Path $jsRuntimeDir | Out-Null
 
 Write-Host "`n=== Step 1: Python ===" -ForegroundColor Yellow
 
@@ -73,7 +76,41 @@ try {
 Copy-Item "python/downloader.py" (Join-Path $pythonDir "downloader.py") -Force
 Write-Host "OK: Python bundled at $pythonDir" -ForegroundColor Green
 
-Write-Host "`n=== Step 2: FFmpeg ===" -ForegroundColor Yellow
+Write-Host "`n=== Step 2: JS Runtime (Node.js) ===" -ForegroundColor Yellow
+$nodeVersion = "v24.14.0"
+$machineArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+switch ($machineArch) {
+    "arm64" {
+        $nodeArch = "arm64"
+        $expectedNodeZipHash = "88d36e8109736a2fa9bdc596f2cf507a3c52c69cdf96e54f8acd473ec14be853"
+    }
+    default {
+        $nodeArch = "x64"
+        $expectedNodeZipHash = "313fa40c0d7b18575821de8cb17483031fe07d95de5994f6f435f3b345f85c66"
+    }
+}
+$nodeZipUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-$nodeArch.zip"
+Write-Host "Downloading Node.js runtime..."
+try {
+    Invoke-WebRequest -Uri $nodeZipUrl -OutFile node.zip
+    Assert-Sha256 -Path "node.zip" -ExpectedHash $expectedNodeZipHash -Label "node.zip"
+    Expand-Archive -Path node.zip -DestinationPath node-temp -Force
+    $nodeSource = Get-ChildItem node-temp -Recurse -Filter node.exe | Select-Object -First 1
+    if ($null -eq $nodeSource) {
+        throw "Failed to locate node.exe in archive"
+    }
+    Copy-Item $nodeSource.FullName (Join-Path $jsRuntimeDir "node.exe") -Force
+    Remove-Item -Recurse -Force node-temp
+    Remove-Item node.zip
+} catch {
+    if (Test-Path "node-temp") { Remove-Item -Recurse -Force "node-temp" }
+    if (Test-Path "node.zip") { Remove-Item -Force "node.zip" }
+    throw
+}
+& (Join-Path $jsRuntimeDir "node.exe") --version | Out-Null
+Write-Host "OK: JS runtime bundled at $jsRuntimeDir" -ForegroundColor Green
+
+Write-Host "`n=== Step 3: FFmpeg ===" -ForegroundColor Yellow
 
 $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1.1-essentials_build.zip"
 $expectedFfmpegZipHash = "04861d3339c5ebe38b56c19a15cf2c0cc97f5de4fa8910e4d47e5e6404e4a2d4"
@@ -102,11 +139,13 @@ Write-Host "`n=== Summary ===" -ForegroundColor Yellow
 $pythonExe = Join-Path $pythonDir "python.exe"
 $pythonScript = Join-Path $pythonDir "downloader.py"
 $ffmpegExe = Join-Path $ffmpegDir "ffmpeg.exe"
+$nodeExe = Join-Path $jsRuntimeDir "node.exe"
 
-if ((Test-Path $pythonExe) -and (Test-Path $pythonScript) -and (Test-Path $ffmpegExe)) {
+if ((Test-Path $pythonExe) -and (Test-Path $pythonScript) -and (Test-Path $ffmpegExe) -and (Test-Path $nodeExe)) {
     Write-Host "All dependencies bundled for Tauri." -ForegroundColor Green
     Write-Host "Python: $pythonExe"
     Write-Host "Script: $pythonScript"
+    Write-Host "JS runtime: $nodeExe"
     Write-Host "FFmpeg: $ffmpegExe"
     Write-Host "Next: pnpm tauri:build:win"
 } else {

@@ -492,12 +492,16 @@ class TestValidateOutputPath:
         """Test valid path passes"""
         output_path = temp_dir / "output.mp4"
         YouTubeDownloader._validate_output_path(str(output_path))
-        assert output_path.parent.exists()
 
-    def test_path_creates_parent_dirs(self, temp_dir):
-        """Test path creation creates parent directories"""
+    def test_validate_does_not_create_parent_dirs(self, temp_dir):
+        """Validation should not mutate filesystem state."""
         output_path = temp_dir / "nested" / "deep" / "output.mp4"
         YouTubeDownloader._validate_output_path(str(output_path))
+        assert output_path.parent.exists() is False
+
+    def test_ensure_output_parent_dir_creates_parent_dirs(self, temp_dir):
+        output_path = temp_dir / "nested" / "deep" / "output.mp4"
+        YouTubeDownloader._ensure_output_parent_dir(str(output_path))
         assert output_path.parent.exists()
 
 
@@ -929,6 +933,82 @@ class TestExtractVideoInfo:
                 assert result.id == sample_video_info["id"]
                 assert attempted_opts[0].get("cookiesfrombrowser") is None
                 assert any(opts.get("cookiesfrombrowser") == ("chrome",) for opts in attempted_opts)
+
+    def test_extract_attempts_fetch_pot_when_runtime_is_available(self, sample_video_info, temp_dir):
+        attempted_opts = []
+        runtime_path = temp_dir / "node"
+        runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runtime_path.chmod(0o755)
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def extract_info(self, _url, download=False):
+                if self.opts.get("js_runtimes"):
+                    return sample_video_info
+                raise yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+
+        with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
+            with patch.dict(
+                os.environ,
+                {
+                    "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
+                    "YT_DLP_ENABLE_FETCH_POT": "true",
+                    "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
+                    "YT_DLP_JS_RUNTIME_NAME": "node",
+                },
+                clear=False,
+            ):
+                downloader = YouTubeDownloader()
+                result = downloader.extract_video_info("https://youtube.com/watch?v=test")
+                assert result is not None
+                assert any(opts.get("js_runtimes") for opts in attempted_opts)
+                fetch_pot_attempts = [
+                    opts
+                    for opts in attempted_opts
+                    if "fetch_pot" in ((opts.get("extractor_args") or {}).get("youtube") or {})
+                ]
+                assert fetch_pot_attempts
+
+    def test_extract_skips_fetch_pot_when_runtime_is_unavailable(self, sample_video_info):
+        attempted_opts = []
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def extract_info(self, _url, download=False):
+                return sample_video_info
+
+        with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
+            with patch.dict(
+                os.environ,
+                {
+                    "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
+                    "YT_DLP_ENABLE_FETCH_POT": "true",
+                    "YT_DLP_JS_RUNTIME_PATH": "/nonexistent/runtime",
+                    "YT_DLP_JS_RUNTIME_NAME": "node",
+                },
+                clear=False,
+            ):
+                downloader = YouTubeDownloader()
+                result = downloader.extract_video_info("https://youtube.com/watch?v=test")
+                assert result is not None
+                assert all(not opts.get("js_runtimes") for opts in attempted_opts)
 
 
 # ============================================================================
@@ -1782,6 +1862,7 @@ class TestDownloadVideo:
         """Default selectors should prioritize MP4-compatible formats."""
         selectors = YouTubeDownloader._build_format_selectors("bestvideo*+bestaudio")
         assert selectors == [
+            "bestvideo*+bestaudio/best",
             "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=aac]"
@@ -1802,6 +1883,12 @@ class TestDownloadVideo:
             candidates = YouTubeDownloader._browser_cookie_candidates(include_default_fallback=False)
             assert candidates == ["arc"]
 
+    def test_resolve_runtime_executable_accepts_command_name(self):
+        with patch("downloader.shutil.which", return_value="/usr/bin/node"):
+            with patch("downloader.os.access", return_value=True):
+                resolved = YouTubeDownloader._resolve_runtime_executable("node")
+                assert resolved == "/usr/bin/node"
+
     def test_cookiesfrombrowser_option_maps_arc_to_chrome_profile(self):
         downloader = YouTubeDownloader()
         with patch.object(downloader, "_arc_cookie_profile_path", return_value="/tmp/arc-default"):
@@ -1809,6 +1896,27 @@ class TestDownloadVideo:
                 "chrome",
                 "/tmp/arc-default",
             )
+
+    def test_compose_ydl_opts_merges_extractor_args_without_clobbering(self, temp_dir):
+        runtime_path = temp_dir / "node"
+        runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runtime_path.chmod(0o755)
+        runtime = {
+            "name": "node",
+            "path": str(runtime_path),
+            "js_runtimes": {"node": {"path": str(runtime_path), "paths": [str(runtime_path)]}},
+        }
+
+        opts = YouTubeDownloader._compose_ydl_opts(
+            {"extractor_args": {"youtube": {"player_client": ["web"]}}},
+            fetch_pot_runtime=runtime,
+            extractor_args={"youtube": {"player_client": ["android"], "player_js_variant": ["default"]}},
+        )
+        youtube_args = opts.get("extractor_args", {}).get("youtube", {})
+        assert youtube_args.get("player_client") == ["web", "android"]
+        assert youtube_args.get("player_js_variant") == ["default"]
+        assert youtube_args.get("fetch_pot") == ["auto"]
+        assert opts.get("js_runtimes") is not None
 
     def test_resolve_ffmpeg_location_for_ytdlp_falls_back_to_binary_name(self):
         downloader = YouTubeDownloader()
@@ -2454,6 +2562,92 @@ class TestDownloadVideo:
             is False
         )
 
+    def test_normalize_output_file_rejects_incompatible_webm_codecs(self, temp_dir):
+        downloader = YouTubeDownloader()
+        source = temp_dir / "source.mp4"
+        target = temp_dir / "output.webm"
+        source.write_bytes(b"video data")
+        with patch.object(downloader, "_probe_primary_stream_codecs", return_value=("h264", "aac")):
+            ok, error = downloader._normalize_output_file(source, target, selected_format=None)
+            assert ok is False
+            assert "WebM-compatible codecs" in (error or "")
+
+    def test_finalize_without_normalization_uses_source_extension(self, temp_dir):
+        downloader = YouTubeDownloader()
+        source = temp_dir / "source.webm"
+        source.write_bytes(b"video data")
+        requested = temp_dir / "output.mp4"
+
+        ok, final_path, error = downloader._finalize_without_normalization(source, requested)
+
+        assert ok is True, error
+        assert final_path == temp_dir / "output.webm"
+        assert final_path.exists()
+        assert final_path.read_bytes() == b"video data"
+
+    def test_download_skips_normalization_when_disabled(self, temp_dir, sample_video_info):
+        output_file = temp_dir / "output.mp4"
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.webm"
+        downloaded_file.write_bytes(b"video data")
+
+        downloader = YouTubeDownloader()
+
+        class MockYDL:
+            def __init__(self, _opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                return None
+
+        with patch.object(
+            downloader,
+            "extract_video_info",
+            return_value=VideoInfo(
+                id=sample_video_info["id"],
+                title=sample_video_info["title"],
+                duration=sample_video_info["duration"],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None,
+            ),
+        ):
+            with patch.object(downloader, "_get_temp_dir", return_value=temp_dir):
+                with patch.object(downloader, "_get_cached_video_path", return_value=None):
+                    with patch.object(
+                        downloader,
+                        "_find_downloaded_file",
+                        return_value=downloaded_file,
+                    ):
+                        with patch.object(downloader, "_check_file_stability", return_value=True):
+                            with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
+                                with patch.object(downloader, "_normalize_output_file") as mock_normalize:
+                                    with patch.object(downloader, "_transcode_to_quicktime_mp4") as mock_transcode:
+                                        with patch.dict(
+                                            os.environ,
+                                            {"YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION": "true"},
+                                            clear=False,
+                                        ):
+                                            result = downloader.download_video(
+                                                "https://youtube.com/watch?v=test",
+                                                str(output_file),
+                                            )
+
+        assert result.success is True
+        assert result.file_path == str(temp_dir / "output.webm")
+        assert Path(result.file_path).exists()
+        mock_normalize.assert_not_called()
+        mock_transcode.assert_not_called()
+
     def test_download_transcodes_non_mp4_source_for_mp4_output(self, temp_dir, sample_video_info):
         """When source is webm and output is mp4, downloader should run compatibility transcode."""
         output_file = temp_dir / "output.mp4"
@@ -2677,10 +2871,11 @@ class TestDownloadVideo:
                                                     end_time=30,
                                                 )
                                                 assert result.success is True
-                                                mock_probe.assert_called_once_with(output_file)
+                                                mock_probe.assert_called_once()
+                                                assert mock_probe.call_args.args[0].name.endswith("_section_work.mp4")
                                                 mock_transcode.assert_called_once()
                                                 called_src, called_dst = mock_transcode.call_args.args
-                                                assert called_src == output_file
+                                                assert called_src.name.endswith("_section_work.mp4")
                                                 assert called_dst == output_file
 
     def test_download_fails_when_mp4_compat_transcode_fails(self, temp_dir, sample_video_info):
@@ -3312,6 +3507,35 @@ class TestMainFunction:
                 call_kwargs = mock_downloader.download_video.call_args
                 # start_time, end_time, sections should all be None
                 assert call_kwargs is not None
+
+    def test_main_local_mode_empty_sections_normalizes_output(self, temp_dir, capsys):
+        input_file = temp_dir / "input.webm"
+        input_file.write_bytes(b"video data")
+        output_file = temp_dir / "output.mp4"
+
+        with patch(
+            "sys.argv",
+            ["downloader.py", "--local", str(input_file), "[]", str(output_file)],
+        ):
+            with patch.object(
+                YouTubeDownloader,
+                "_normalize_output_file",
+                return_value=(True, None),
+            ) as mock_normalize:
+                from downloader import main
+
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 0
+                mock_normalize.assert_called_once()
+                called_src, called_dst = mock_normalize.call_args.args
+                assert called_src == input_file
+                assert called_dst == output_file
+                assert mock_normalize.call_args.kwargs.get("selected_format") is None
+
+                captured = capsys.readouterr()
+                output = json.loads(captured.out)
+                assert output["success"] is True
 
     def test_main_download_mode_invalid_sections_json(self, temp_dir, capsys):
         """Test download mode with malformed sections JSON"""

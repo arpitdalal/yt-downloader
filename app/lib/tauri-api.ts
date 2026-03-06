@@ -33,6 +33,9 @@ export interface LogInfo {
 export interface YouTubeAuthStatus {
 	connected: boolean;
 	detectedBrowser: string | null;
+	jsRuntimeAvailable: boolean;
+	jsRuntimeName: string | null;
+	fetchPotEnabled: boolean;
 }
 
 let unlistenDownloadProgress: UnlistenFn | null = null;

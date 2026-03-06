@@ -71,11 +71,17 @@ For downloadable macOS releases, use Developer ID signing + notarization. Unsign
 ## YouTube Auth / Quality
 
 - App uses yt-dlp’s `--cookies-from-browser` at extract/download time (no cookie file sync).
+- App uses best-first adaptive selection (`bestvideo*+bestaudio/best`) and only falls back when blocked.
+- App can enable yt-dlp `fetch_pot` when a JS runtime is available (macOS bundles Deno; Linux/Windows bundle Node.js).
 - UI shows passive “Browser detected: &lt;browser&gt;” when a supported browser (e.g. Chrome, Firefox) is found; cookies from that browser are used automatically for downloads.
 - Sign in to YouTube in your browser if a video requires it; the app will use those cookies on the next download.
 - Optional env overrides:
   - `YT_DLP_ENABLE_BROWSER_COOKIES=false` — disable browser cookie attempts
   - `YT_DLP_COOKIES_BROWSER=arc,chrome,edge,firefox,safari` — control browser order
+  - `YT_DLP_ENABLE_FETCH_POT=false` — disable fetch_pot attempts
+  - `YT_DLP_JS_RUNTIME_PATH=/absolute/path/to/runtime` (or `node`/`deno` on PATH) — override JS runtime binary
+  - `YT_DLP_JS_RUNTIME_NAME=deno|node` — override runtime name used for fetch_pot
+  - `YT_DLP_ALLOW_LOW_QUALITY_FALLBACK=true` — allow low progressive fallback when adaptive streams are blocked
 
 ## Scripts
 
