@@ -473,6 +473,32 @@ export default function App() {
 		}
 	};
 
+	const buildYoutubeBrowserStatus = (): string => {
+		if (!youtubeAuth) {
+			return "Checking browser/runtime status...";
+		}
+		if (youtubeAuth.detectedBrowser) {
+			if (youtubeAuth.connected) {
+				return `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading).`;
+			}
+			return `Browser detected: ${youtubeAuth.detectedBrowser} (cookie auth currently disabled by environment).`;
+		}
+		return "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results.";
+	};
+
+	const buildFetchPotStatus = (): string => {
+		if (!youtubeAuth) {
+			return "Checking fetch_pot configuration...";
+		}
+		if (!youtubeAuth.fetchPotEnabled) {
+			return "fetch_pot is disabled by environment.";
+		}
+		if (youtubeAuth.jsRuntimeAvailable) {
+			return `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`;
+		}
+		return "JS runtime not detected (fetch_pot disabled for this run).";
+	};
+
 	return (
 		<div className="min-h-screen bg-gray-50 py-4 sm:py-8">
 			<div className="max-w-4xl mx-auto px-4 sm:px-6">
@@ -492,20 +518,7 @@ export default function App() {
 						YouTube
 					</h2>
 					<p className="text-sm text-gray-600">
-						{youtubeAuth
-							? youtubeAuth.detectedBrowser
-								? youtubeAuth.connected
-									? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading).`
-									: `Browser detected: ${youtubeAuth.detectedBrowser} (cookie auth currently disabled by environment).`
-								: "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results."
-							: "Checking browser/runtime status..."}{" "}
-						{youtubeAuth
-							? youtubeAuth.fetchPotEnabled
-								? youtubeAuth.jsRuntimeAvailable
-									? `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`
-									: "JS runtime not detected (fetch_pot disabled for this run)."
-								: "fetch_pot is disabled by environment."
-							: "Checking fetch_pot configuration..."}
+						{buildYoutubeBrowserStatus()} {buildFetchPotStatus()}
 					</p>
 				</div>
 

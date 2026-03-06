@@ -930,7 +930,7 @@ class TestExtractVideoInfo:
                     "YT_DLP_ENABLE_BROWSER_COOKIES": "true",
                     "YT_DLP_COOKIES_BROWSER": "chrome",
                 },
-                clear=False,
+                clear=True,
             ):
                 downloader = YouTubeDownloader()
                 result = downloader.extract_video_info("https://youtube.com/watch?v=test")
@@ -970,7 +970,7 @@ class TestExtractVideoInfo:
                     "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
                     "YT_DLP_JS_RUNTIME_NAME": "node",
                 },
-                clear=False,
+                clear=True,
             ):
                 downloader = YouTubeDownloader()
                 result = downloader.extract_video_info("https://youtube.com/watch?v=test")
@@ -1008,7 +1008,7 @@ class TestExtractVideoInfo:
                     "YT_DLP_JS_RUNTIME_PATH": "/nonexistent/runtime",
                     "YT_DLP_JS_RUNTIME_NAME": "node",
                 },
-                clear=False,
+                clear=True,
             ):
                 downloader = YouTubeDownloader()
                 result = downloader.extract_video_info("https://youtube.com/watch?v=test")
@@ -1892,12 +1892,12 @@ class TestDownloadVideo:
         }
 
     def test_browser_cookie_candidates_support_csv(self):
-        with patch.dict(os.environ, {"YT_DLP_COOKIES_BROWSER": "chrome, edge,firefox"}, clear=False):
+        with patch.dict(os.environ, {"YT_DLP_COOKIES_BROWSER": "chrome, edge,firefox"}, clear=True):
             candidates = YouTubeDownloader._browser_cookie_candidates()
             assert candidates[:3] == ["chrome", "edge", "firefox"]
 
     def test_browser_cookie_candidates_no_fallback_when_disabled(self):
-        with patch.dict(os.environ, {"YT_DLP_COOKIES_BROWSER": "arc"}, clear=False):
+        with patch.dict(os.environ, {"YT_DLP_COOKIES_BROWSER": "arc"}, clear=True):
             candidates = YouTubeDownloader._browser_cookie_candidates(include_default_fallback=False)
             assert candidates == ["arc"]
 
@@ -2341,7 +2341,7 @@ class TestDownloadVideo:
                                         with patch.dict(
                                             os.environ,
                                             {"YT_DLP_ALLOW_LOW_QUALITY_FALLBACK": "true"},
-                                            clear=False,
+                                            clear=True,
                                         ):
                                             result = downloader.download_video(
                                                 "https://youtube.com/watch?v=test",
@@ -2798,7 +2798,7 @@ class TestDownloadVideo:
                                         with patch.dict(
                                             os.environ,
                                             {"YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION": "true"},
-                                            clear=False,
+                                            clear=True,
                                         ):
                                             result = downloader.download_video(
                                                 "https://youtube.com/watch?v=test",
@@ -2870,7 +2870,7 @@ class TestDownloadVideo:
                                         with patch.dict(
                                             os.environ,
                                             {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
-                                            clear=False,
+                                            clear=True,
                                         ):
                                             result = downloader.download_video(
                                                 "https://youtube.com/watch?v=test",
@@ -2946,7 +2946,7 @@ class TestDownloadVideo:
                                             with patch.dict(
                                                 os.environ,
                                                 {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
-                                                clear=False,
+                                                clear=True,
                                             ):
                                                 result = downloader.download_video(
                                                     "https://youtube.com/watch?v=test",
@@ -3025,7 +3025,7 @@ class TestDownloadVideo:
                                             with patch.dict(
                                                 os.environ,
                                                 {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
-                                                clear=False,
+                                                clear=True,
                                             ):
                                                 result = downloader.download_video(
                                                     "https://youtube.com/watch?v=test",
@@ -3100,7 +3100,7 @@ class TestDownloadVideo:
                                         with patch.dict(
                                             os.environ,
                                             {"YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE": "true"},
-                                            clear=False,
+                                            clear=True,
                                         ):
                                             result = downloader.download_video(
                                                 "https://youtube.com/watch?v=test",

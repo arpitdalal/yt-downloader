@@ -1158,7 +1158,7 @@ fn packaged_js_runtime_path(app: &AppHandle) -> Option<(PathBuf, String)> {
             resource_dir.join("jsruntime").join("node"),
         )
     };
-    if path.exists() && command_available(&path.to_string_lossy()) {
+    if command_available(&path.to_string_lossy()) {
         return Some((path, name));
     }
     None

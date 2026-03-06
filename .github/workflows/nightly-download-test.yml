@@ -27,9 +27,9 @@ jobs:
           import sys
 
           requirements = pathlib.Path("python/requirements.txt").read_text(encoding="utf-8")
-          match = re.search(r"^\s*yt-dlp(?:\[[^\]]+\])?[><=]+\s*([0-9.]+)\s*$", requirements, re.MULTILINE)
+          match = re.search(r"^\s*yt-dlp(?:\[[^\]]+\])?\s*==\s*([0-9.]+)\s*$", requirements, re.MULTILINE)
           if not match:
-              sys.stderr.write("::error::Could not extract pinned yt-dlp version from requirements.txt\n")
+              sys.stderr.write("::error::Could not extract yt-dlp version from requirements.txt. An exact pin is required (example: yt-dlp[default]==2026.2.21)\n")
               raise SystemExit(1)
           print(match.group(1))
           PY
