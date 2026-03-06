@@ -433,7 +433,6 @@ fn download_env_overrides(app: &AppHandle, ffmpeg_path: &Path) -> Vec<(&'static 
 }
 
 /// Returns auth/runtime status based on configured browser list and runtime discovery.
-
 fn cookie_browser_candidates() -> Vec<String> {
     let raw = env::var("YT_DLP_COOKIES_BROWSER").unwrap_or_default();
     let requested: Vec<String> = raw
