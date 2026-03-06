@@ -71,10 +71,15 @@ For downloadable macOS releases, use Developer ID signing + notarization. Unsign
 ## YouTube Auth / Quality
 
 - App uses yt-dlp’s `--cookies-from-browser` at extract/download time (no cookie file sync).
-- App uses best-first adaptive selection (`bestvideo*+bestaudio/best`) and only falls back when blocked.
+- App applies yt-dlp `-t mp4` preset behavior for compatibility-first best quality:
+  - base selector remains adaptive best-first (`bestvideo*+bestaudio/best`)
+  - downloads are merged/remuxed to `.mp4` when possible
+  - stream sorting prefers H.264 video + AAC audio for broad playback support
+- MP4-compatible fallback selectors are tried before any low-quality fallback.
 - App can enable yt-dlp `fetch_pot` when a JS runtime is available (macOS bundles Deno; Linux/Windows bundle Node.js).
 - UI shows passive “Browser detected: &lt;browser&gt;” when a supported browser (e.g. Chrome, Firefox) is found; cookies from that browser are used automatically for downloads.
 - Sign in to YouTube in your browser if a video requires it; the app will use those cookies on the next download.
+- See [docs/yt-dlp-presets.md](/Users/arpit.dalal/personal/yt-downloader/docs/yt-dlp-presets.md) for preset-alias details.
 - Optional env overrides:
   - `YT_DLP_ENABLE_BROWSER_COOKIES=false` — disable browser cookie attempts
   - `YT_DLP_COOKIES_BROWSER=arc,chrome,edge,firefox,safari` — control browser order
