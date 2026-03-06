@@ -1009,6 +1009,10 @@ class TestExtractVideoInfo:
                 result = downloader.extract_video_info("https://youtube.com/watch?v=test")
                 assert result is not None
                 assert all(not opts.get("js_runtimes") for opts in attempted_opts)
+                assert all(
+                    "fetch_pot" not in ((opts.get("extractor_args") or {}).get("youtube") or {})
+                    for opts in attempted_opts
+                )
 
 
 # ============================================================================
@@ -2088,6 +2092,76 @@ class TestDownloadVideo:
                                             "hdr:12",
                                             "acodec:aac",
                                         ]
+
+    def test_download_skips_mp4_preset_options_for_webm_output(self, temp_dir, sample_video_info):
+        """WebM output requests should not force mp4 preset options."""
+        output_file = temp_dir / "output.webm"
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.webm"
+        downloaded_file.write_bytes(b"video data")
+        attempted_opts = []
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                return None
+
+        downloader = YouTubeDownloader()
+        with patch.object(
+            downloader,
+            "extract_video_info",
+            return_value=VideoInfo(
+                id=sample_video_info["id"],
+                title=sample_video_info["title"],
+                duration=sample_video_info["duration"],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None,
+            ),
+        ):
+            with patch.object(downloader, "_get_temp_dir", return_value=temp_dir):
+                with patch.object(downloader, "_get_cached_video_path", return_value=None):
+                    with patch.object(
+                        downloader,
+                        "_find_downloaded_file",
+                        return_value=downloaded_file,
+                    ):
+                        with patch.object(downloader, "_check_file_stability", return_value=True):
+                            with patch.object(downloader, "_normalize_output_file") as mock_normalize:
+
+                                def normalize_side_effect(_src, dst, _selected):
+                                    Path(dst).write_bytes(b"normalized")
+                                    return True, None
+
+                                mock_normalize.side_effect = normalize_side_effect
+                                with patch(
+                                    "downloader.yt_dlp.YoutubeDL",
+                                    side_effect=lambda opts: MockYDL(opts),
+                                ):
+                                    with patch("downloader.time.sleep"):
+                                        result = downloader.download_video(
+                                            "https://youtube.com/watch?v=test",
+                                            str(output_file),
+                                        )
+                                        assert result.success is True
+                                        assert attempted_opts
+                                        download_attempts = [opts for opts in attempted_opts if opts.get("format")]
+                                        assert download_attempts
+                                        first_attempt = download_attempts[0]
+                                        assert "merge_output_format" not in first_attempt
+                                        assert "remuxvideo" not in first_attempt
+                                        assert "format_sort" not in first_attempt
 
     def test_download_ffmpeg_merge_error_does_not_fallback_to_progressive(self, temp_dir, sample_video_info):
         """If ffmpeg merge is unavailable, fail explicitly instead of downloading low quality."""

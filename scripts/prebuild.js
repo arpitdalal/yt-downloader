@@ -4,6 +4,7 @@ import { platform } from "node:os";
 import { join } from "node:path";
 
 const isWindows = platform() === "win32";
+const isMac = platform() === "darwin";
 const resourcesRoot = "src-tauri/resources";
 
 const resourcesDirs = [
@@ -18,6 +19,11 @@ const resourcesDirs = [
 		path: join(resourcesRoot, "ffmpeg"),
 		name: "FFmpeg",
 		required: isWindows ? ["ffmpeg.exe"] : ["ffmpeg"],
+	},
+	{
+		path: join(resourcesRoot, "jsruntime"),
+		name: "JS runtime",
+		required: isWindows ? ["node.exe"] : isMac ? ["deno"] : ["node"],
 	},
 ];
 

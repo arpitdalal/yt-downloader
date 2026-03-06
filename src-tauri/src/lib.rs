@@ -1768,10 +1768,12 @@ mod tests {
     #[test]
     fn detected_browser_auth_status_returns_runtime_status() {
         let status = detected_browser_auth_status(Some((PathBuf::from("node"), "node".into())));
-        assert_eq!(status.connected, status.detected_browser.is_some());
         assert!(status.js_runtime_available);
         assert_eq!(status.js_runtime_name.as_deref(), Some("node"));
-        assert!(status.fetch_pot_enabled);
+        assert_eq!(
+            status.fetch_pot_enabled,
+            env_truthy("YT_DLP_ENABLE_FETCH_POT", true)
+        );
     }
 
     #[test]

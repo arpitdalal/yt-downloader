@@ -1713,6 +1713,7 @@ class YouTubeDownloader:
                 error_message=f"Invalid output path: {str(e)}",
                 video_info=None,
             )
+        requested_output_ext = Path(output_path).suffix.lower()
 
         # Extract video info
         video_info = self.extract_video_info(url)
@@ -1951,7 +1952,8 @@ class YouTubeDownloader:
                         "sleep_interval_requests": 1,
                         "continuedl": False,
                     }
-                    base_opts.update(self._mp4_preset_options())
+                    if requested_output_ext in ("", ".mp4"):
+                        base_opts.update(self._mp4_preset_options())
 
                     # Let yt-dlp merge highest quality streams using bundled/system ffmpeg.
                     if ffmpeg_location_for_ytdlp:

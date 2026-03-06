@@ -22,6 +22,7 @@ export default function App() {
 	const [status, setStatus] = useState<DownloadStatus>("idle");
 	const statusRef = useRef<DownloadStatus>("idle");
 	const [progress, setProgress] = useState(0);
+	const progressRef = useRef(0);
 	const [error, setError] = useState<string | null>(null);
 	const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
 	const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -37,14 +38,28 @@ export default function App() {
 		statusRef.current = status;
 	}, [status]);
 
+	const setProgressSynced = useCallback(
+		(next: number | ((previous: number) => number)) => {
+			setProgress((previous) => {
+				const resolved =
+					typeof next === "function"
+						? (next as (previous: number) => number)(previous)
+						: next;
+				progressRef.current = resolved;
+				return resolved;
+			});
+		},
+		[],
+	);
+
 	// Set up progress listener once; use a ref to avoid resubscription races.
 	useEffect(() => {
 		tauriAPI.onDownloadProgress((data: DownloadProgressData) => {
-			if (statusRef.current !== "downloading") {
+			if (statusRef.current !== "downloading" || progressRef.current >= 100) {
 				return;
 			}
 
-			setProgress((previous) => {
+			setProgressSynced((previous) => {
 				if (typeof data.percent === "number" && Number.isFinite(data.percent)) {
 					return Math.min(99.5, Math.max(previous, data.percent));
 				}
@@ -72,7 +87,7 @@ export default function App() {
 		return () => {
 			tauriAPI.removeDownloadProgressListener();
 		};
-	}, []);
+	}, [setProgressSynced]);
 
 	const refreshYouTubeAuthStatus = useCallback(async () => {
 		try {
@@ -98,10 +113,10 @@ export default function App() {
 		const message = error instanceof Error ? error.message : String(error);
 
 		// Map technical errors to user-friendly messages
+		if (message.toLowerCase().includes("input file not found")) {
+			return "The selected file was not found. It may have been moved or deleted.";
+		}
 		if (message.includes("Invalid input")) {
-			if (message.toLowerCase().includes("input file not found")) {
-				return "The selected file was not found. It may have been moved or deleted.";
-			}
 			if (message.includes("URL")) {
 				return "Please enter a valid YouTube URL.";
 			}
@@ -318,7 +333,7 @@ export default function App() {
 		// Reset state
 		setError(null);
 		setSuccessMessage(null);
-		setProgress(0);
+		setProgressSynced(0);
 		setVideoInfo(null);
 
 		try {
@@ -397,7 +412,7 @@ export default function App() {
 
 				// Step 3: Start download
 				setStatus("downloading");
-				setProgress(0);
+				setProgressSynced(0);
 
 				// Convert sections to format expected by backend
 				const sectionsArray = sections.map((s) => ({
@@ -412,7 +427,7 @@ export default function App() {
 				});
 
 				setStatus("completed");
-				setProgress(100);
+				setProgressSynced(100);
 				const finalPath = result.filePath || savePath;
 				setSuccessMessage(
 					finalPath === savePath
@@ -447,7 +462,7 @@ export default function App() {
 		try {
 			await tauriAPI.cancelDownload();
 			setStatus("idle");
-			setProgress(0);
+			setProgressSynced(0);
 			setError(null);
 			setUrl("");
 			setLocalFile(null);

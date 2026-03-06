@@ -1,3 +1,4 @@
-yt-dlp[ejs]>=2026.2.21
+# `default` extra includes `yt-dlp-ejs`, used by fetch_pot integration.
+yt-dlp[default]>=2026.2.21
 pytest>=9.0.2
 pytest-mock>=3.12.0

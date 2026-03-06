@@ -21,11 +21,19 @@ jobs:
         id: version-check
         run: |
           # Extract minimum pinned version from requirements.txt
-          PINNED=$(grep -oP 'yt-dlp[><=]+\K[0-9.]+' python/requirements.txt)
-          if [ -z "$PINNED" ]; then
-            echo "::error::Could not extract pinned yt-dlp version from requirements.txt"
-            exit 1
-          fi
+          PINNED=$(python3 - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          requirements = pathlib.Path("python/requirements.txt").read_text(encoding="utf-8")
+          match = re.search(r"^\s*yt-dlp(?:\[[^\]]+\])?[><=]+\s*([0-9.]+)\s*$", requirements, re.MULTILINE)
+          if not match:
+              sys.stderr.write("::error::Could not extract pinned yt-dlp version from requirements.txt\n")
+              raise SystemExit(1)
+          print(match.group(1))
+          PY
+          )
           echo "pinned=$PINNED"
 
           # Get latest yt-dlp version from PyPI
@@ -77,7 +85,7 @@ jobs:
             if (parts.length < 3) throw new Error(`Unexpected version format: ${latest}`);
             const githubTag = [parts[0], parts[1].padStart(2, '0'), parts[2].padStart(2, '0')].join('.');
             const title = `yt-dlp update available: ${pinned} → ${latest}`;
-            const body = `A newer version of yt-dlp is available.\n\n**Bundled:** \`${pinned}\`\n**Latest:** \`${latest}\`\n\n**Changelog:** https://github.com/yt-dlp/yt-dlp/releases/tag/${githubTag}\n\nUpdate \`python/requirements.txt\` to \`yt-dlp>=${latest}\` and test locally.`;
+            const body = `A newer version of yt-dlp is available.\n\n**Bundled:** \`${pinned}\`\n**Latest:** \`${latest}\`\n\n**Changelog:** https://github.com/yt-dlp/yt-dlp/releases/tag/${githubTag}\n\nUpdate \`python/requirements.txt\` to \`yt-dlp[default]>=${latest}\` and test locally.`;
             const { data: existing } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
