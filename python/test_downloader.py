@@ -499,6 +499,11 @@ class TestValidateOutputPath:
         YouTubeDownloader._validate_output_path(str(output_path))
         assert output_path.parent.exists() is False
 
+    def test_missing_extension_raises_value_error(self, temp_dir):
+        output_path = temp_dir / "output"
+        with pytest.raises(ValueError, match="extension"):
+            YouTubeDownloader._validate_output_path(str(output_path))
+
     def test_ensure_output_parent_dir_creates_parent_dirs(self, temp_dir):
         output_path = temp_dir / "nested" / "deep" / "output.mp4"
         YouTubeDownloader._ensure_output_parent_dir(str(output_path))
@@ -1866,7 +1871,8 @@ class TestDownloadVideo:
         """Default selectors should prioritize MP4-compatible formats."""
         selectors = YouTubeDownloader._build_format_selectors("bestvideo*+bestaudio")
         assert selectors == [
-            "bestvideo*+bestaudio/best",
+            "bestvideo*+bestaudio",
+            "bestvideo+bestaudio",
             "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=aac]"
@@ -2008,9 +2014,7 @@ class TestDownloadVideo:
                                         )
                                         assert result.success is True
                                         attempted_non_empty = [fmt for fmt in attempted_formats if fmt]
-                                        default_selector = YouTubeDownloader._build_format_selectors(
-                                            "bestvideo*+bestaudio"
-                                        )[0]
+                                        default_selector = YouTubeDownloader._build_format_selectors("nonexistent")[1]
                                         assert attempted_non_empty[:2] == [
                                             "nonexistent",
                                             default_selector,

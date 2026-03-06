@@ -411,8 +411,8 @@ fn yt_dlp_env_overrides(
         env::var("YT_DLP_ENABLE_FETCH_POT").unwrap_or_else(|_| "true".to_string());
     env_overrides.push(("YT_DLP_ENABLE_FETCH_POT", enable_fetch_pot));
 
-    let disable_post_compat_normalization =
-        env::var("YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION").unwrap_or_else(|_| "true".to_string());
+    let disable_post_compat_normalization = env::var("YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION")
+        .unwrap_or_else(|_| "false".to_string());
     env_overrides.push((
         "YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION",
         disable_post_compat_normalization,
@@ -491,6 +491,40 @@ fn user_home_dir() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
+fn arc_cookie_store_exists(user_data_dir: &Path) -> bool {
+    if user_data_dir.join("Default").join("Cookies").is_file() {
+        return true;
+    }
+
+    let entries = match std::fs::read_dir(user_data_dir) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let profile_name = entry.file_name();
+        let profile_name = profile_name.to_string_lossy();
+        if !profile_name.starts_with("Profile") {
+            continue;
+        }
+
+        if entry.path().join("Cookies").is_file() {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(target_os = "macos")]
 fn browser_cookie_store_exists(browser: &str) -> bool {
     let home = match user_home_dir() {
         Some(home) => home,
@@ -498,9 +532,7 @@ fn browser_cookie_store_exists(browser: &str) -> bool {
     };
 
     match browser {
-        "arc" => home
-            .join("Library/Application Support/Arc/User Data")
-            .exists(),
+        "arc" => arc_cookie_store_exists(&home.join("Library/Application Support/Arc/User Data")),
         "chrome" => home
             .join("Library/Application Support/Google/Chrome")
             .exists(),
@@ -645,8 +677,8 @@ fn run_process_local_video(
 
     let python_dir = get_python_working_dir(&python_path);
     let mut env_overrides = vec![("FFMPEG_PATH", ffmpeg_path.to_string_lossy().to_string())];
-    let disable_post_compat_normalization =
-        env::var("YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION").unwrap_or_else(|_| "true".to_string());
+    let disable_post_compat_normalization = env::var("YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION")
+        .unwrap_or_else(|_| "false".to_string());
     env_overrides.push((
         "YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION",
         disable_post_compat_normalization,
@@ -1774,6 +1806,30 @@ mod tests {
             status.fetch_pot_enabled,
             env_truthy("YT_DLP_ENABLE_FETCH_POT", true)
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn arc_cookie_store_exists_requires_cookie_db_file() {
+        let root = env::temp_dir().join(format!(
+            "yt-downloader-arc-cookie-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Profile 1")).expect("failed to create profile dir");
+        assert!(!arc_cookie_store_exists(&root));
+
+        std::fs::create_dir_all(root.join("Default")).expect("failed to create default dir");
+        std::fs::File::create(root.join("Default").join("Cookies"))
+            .expect("failed to create cookies db");
+        assert!(arc_cookie_store_exists(&root));
+        std::fs::remove_file(root.join("Default").join("Cookies"))
+            .expect("failed to remove default cookies db");
+        std::fs::File::create(root.join("Profile 1").join("Cookies"))
+            .expect("failed to create profile cookies db");
+        assert!(arc_cookie_store_exists(&root));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

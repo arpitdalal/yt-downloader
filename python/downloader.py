@@ -249,6 +249,8 @@ class YouTubeDownloader:
         path = Path(output_path)
         if path.name.strip() == "":
             raise ValueError("Output path must include a filename")
+        if not path.suffix:
+            raise ValueError("Output path must include a file extension (for example: .mp4, .mkv, or .webm)")
 
         # Check for path traversal attempts (informational-only; absolute paths are allowed).
         try:
@@ -275,11 +277,11 @@ class YouTubeDownloader:
             "bestvideo+bestaudio",
             "bestvideo+bestaudio/best",
         }:
-            requested_quality = "bestvideo*+bestaudio/best"
+            requested_quality = "bestvideo*+bestaudio"
 
         candidates = [
             requested_quality,
-            "bestvideo*+bestaudio/best",
+            "bestvideo+bestaudio",
             "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=h264]+bestaudio[ext=m4a][acodec^=mp4a]"
             "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=aac]"

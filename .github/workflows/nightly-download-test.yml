@@ -20,7 +20,7 @@ jobs:
       - name: Check yt-dlp version staleness
         id: version-check
         run: |
-          # Extract minimum pinned version from requirements.txt
+          # Extract pinned version from requirements.txt
           PINNED=$(python3 - <<'PY'
           import pathlib
           import re
@@ -85,7 +85,7 @@ jobs:
             if (parts.length < 3) throw new Error(`Unexpected version format: ${latest}`);
             const githubTag = [parts[0], parts[1].padStart(2, '0'), parts[2].padStart(2, '0')].join('.');
             const title = `yt-dlp update available: ${pinned} → ${latest}`;
-            const body = `A newer version of yt-dlp is available.\n\n**Bundled:** \`${pinned}\`\n**Latest:** \`${latest}\`\n\n**Changelog:** https://github.com/yt-dlp/yt-dlp/releases/tag/${githubTag}\n\nUpdate \`python/requirements.txt\` to \`yt-dlp[default]>=${latest}\` and test locally.`;
+            const body = `A newer version of yt-dlp is available.\n\n**Bundled:** \`${pinned}\`\n**Latest:** \`${latest}\`\n\n**Changelog:** https://github.com/yt-dlp/yt-dlp/releases/tag/${githubTag}\n\nUpdate \`python/requirements.txt\` to \`yt-dlp[default]==${latest}\` and test locally.`;
             const { data: existing } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,

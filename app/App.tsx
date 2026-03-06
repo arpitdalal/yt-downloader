@@ -26,28 +26,24 @@ export default function App() {
 	const [error, setError] = useState<string | null>(null);
 	const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
 	const [successMessage, setSuccessMessage] = useState<string | null>(null);
-	const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus>({
-		connected: false,
-		detectedBrowser: null,
-		jsRuntimeAvailable: false,
-		jsRuntimeName: null,
-		fetchPotEnabled: true,
-	});
+	const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus | null>(
+		null,
+	);
 
-	useEffect(() => {
-		statusRef.current = status;
-	}, [status]);
+	const setStatusSynced = useCallback((next: DownloadStatus) => {
+		statusRef.current = next;
+		setStatus(next);
+	}, []);
 
 	const setProgressSynced = useCallback(
 		(next: number | ((previous: number) => number)) => {
-			setProgress((previous) => {
-				const resolved =
-					typeof next === "function"
-						? (next as (previous: number) => number)(previous)
-						: next;
-				progressRef.current = resolved;
-				return resolved;
-			});
+			const previous = progressRef.current;
+			const resolved =
+				typeof next === "function"
+					? (next as (previous: number) => number)(previous)
+					: next;
+			progressRef.current = resolved;
+			setProgress(resolved);
 		},
 		[],
 	);
@@ -145,7 +141,10 @@ export default function App() {
 		}
 		const requiresYouTubeSignIn = isYouTubeAuthError(message);
 		if (requiresYouTubeSignIn) {
-			if (!youtubeAuth.jsRuntimeAvailable && youtubeAuth.fetchPotEnabled) {
+			if (
+				youtubeAuth?.fetchPotEnabled &&
+				youtubeAuth.jsRuntimeAvailable === false
+			) {
 				return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again. If it still fails, install/update the app runtime bundle (JS runtime missing).";
 			}
 			return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again.";
@@ -326,7 +325,7 @@ export default function App() {
 		const validationError = validateSections();
 		if (validationError) {
 			setError(validationError);
-			setStatus("error");
+			setStatusSynced("error");
 			return;
 		}
 
@@ -339,7 +338,7 @@ export default function App() {
 		try {
 			if (localFile) {
 				// Handle local file processing
-				setStatus("downloading"); // Use downloading state for processing UI
+				setStatusSynced("downloading"); // Use downloading state for processing UI
 
 				// Show save dialog
 				const originalFilename = localFile.split(/[/\\]/).pop() || "video.mp4";
@@ -350,13 +349,13 @@ export default function App() {
 				});
 
 				if (dialogResult.canceled) {
-					setStatus("idle");
+					setStatusSynced("idle");
 					return;
 				}
 
 				if (!dialogResult.filePath) {
 					setError("No file path selected");
-					setStatus("error");
+					setStatusSynced("error");
 					return;
 				}
 				// Convert sections to format expected by backend
@@ -371,7 +370,7 @@ export default function App() {
 					sections: sectionsArray,
 				});
 
-				setStatus("completed");
+				setStatusSynced("completed");
 				const requestedPath = dialogResult.filePath;
 				const finalPath = result.filePath || requestedPath;
 				setSuccessMessage(
@@ -381,7 +380,7 @@ export default function App() {
 				);
 			} else {
 				// Handle YouTube download
-				setStatus("extracting");
+				setStatusSynced("extracting");
 				const info = await tauriAPI.extractVideoInfo(url.trim());
 
 				if (!info) {
@@ -399,19 +398,19 @@ export default function App() {
 				});
 
 				if (dialogResult.canceled) {
-					setStatus("idle");
+					setStatusSynced("idle");
 					return;
 				}
 
 				if (!dialogResult.filePath) {
 					setError("No file path selected");
-					setStatus("error");
+					setStatusSynced("error");
 					return;
 				}
 				const savePath = dialogResult.filePath;
 
 				// Step 3: Start download
-				setStatus("downloading");
+				setStatusSynced("downloading");
 				setProgressSynced(0);
 
 				// Convert sections to format expected by backend
@@ -426,7 +425,7 @@ export default function App() {
 					sections: sectionsArray,
 				});
 
-				setStatus("completed");
+				setStatusSynced("completed");
 				setProgressSynced(100);
 				const finalPath = result.filePath || savePath;
 				setSuccessMessage(
@@ -453,7 +452,7 @@ export default function App() {
 			if (isYouTubeAuthError(errorMessage)) {
 				void refreshYouTubeAuthStatus();
 			}
-			setStatus("error");
+			setStatusSynced("error");
 			setError(getErrorMessage(err));
 		}
 	};
@@ -461,7 +460,7 @@ export default function App() {
 	const handleCancel = async () => {
 		try {
 			await tauriAPI.cancelDownload();
-			setStatus("idle");
+			setStatusSynced("idle");
 			setProgressSynced(0);
 			setError(null);
 			setUrl("");
@@ -493,16 +492,20 @@ export default function App() {
 						YouTube
 					</h2>
 					<p className="text-sm text-gray-600">
-						{youtubeAuth.detectedBrowser
-							? youtubeAuth.connected
-								? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading).`
-								: `Browser detected: ${youtubeAuth.detectedBrowser} (cookie auth currently disabled by environment).`
-							: "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results."}{" "}
-						{youtubeAuth.fetchPotEnabled
-							? youtubeAuth.jsRuntimeAvailable
-								? `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`
-								: "JS runtime not detected (fetch_pot disabled for this run)."
-							: "fetch_pot is disabled by environment."}
+						{youtubeAuth
+							? youtubeAuth.detectedBrowser
+								? youtubeAuth.connected
+									? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading).`
+									: `Browser detected: ${youtubeAuth.detectedBrowser} (cookie auth currently disabled by environment).`
+								: "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results."
+							: "Checking browser/runtime status..."}{" "}
+						{youtubeAuth
+							? youtubeAuth.fetchPotEnabled
+								? youtubeAuth.jsRuntimeAvailable
+									? `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`
+									: "JS runtime not detected (fetch_pot disabled for this run)."
+								: "fetch_pot is disabled by environment."
+							: "Checking fetch_pot configuration..."}
 					</p>
 				</div>
 
