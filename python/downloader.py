@@ -41,6 +41,29 @@ SUPPORTED_COOKIE_BROWSERS = {
     "vivaldi",
     "whale",
 }
+YT_DLP_PRESET_ALIASES = {
+    "mp3": ["-f", "ba[acodec^=mp3]/ba/b", "-x", "--audio-format", "mp3"],
+    "aac": ["-f", "ba[acodec^=aac]/ba[acodec^=mp4a.40.]/ba/b", "-x", "--audio-format", "aac"],
+    "mp4": [
+        "--merge-output-format",
+        "mp4",
+        "--remux-video",
+        "mp4",
+        "-S",
+        "vcodec:h264,lang,quality,res,fps,hdr:12,acodec:aac",
+    ],
+    "mkv": ["--merge-output-format", "mkv", "--remux-video", "mkv"],
+    "sleep": [
+        "--sleep-subtitles",
+        "5",
+        "--sleep-requests",
+        "0.75",
+        "--sleep-interval",
+        "10",
+        "--max-sleep-interval",
+        "20",
+    ],
+}
 
 
 @dataclass
@@ -281,6 +304,15 @@ class YouTubeDownloader:
             "/best[ext=mp4][vcodec^=avc1][acodec^=aac]"
             "/best[ext=mp4][vcodec^=h264][acodec^=aac]",
         ]
+
+    @staticmethod
+    def _mp4_preset_options() -> dict:
+        """yt-dlp `-t mp4` preset options for wide compatibility at best quality."""
+        return {
+            "merge_output_format": "mp4",
+            "remuxvideo": "mp4",
+            "format_sort": ["vcodec:h264", "lang", "quality", "res", "fps", "hdr:12", "acodec:aac"],
+        }
 
     @staticmethod
     def _cache_key(video_id: str) -> str:
@@ -1919,6 +1951,7 @@ class YouTubeDownloader:
                         "sleep_interval_requests": 1,
                         "continuedl": False,
                     }
+                    base_opts.update(self._mp4_preset_options())
 
                     # Let yt-dlp merge highest quality streams using bundled/system ffmpeg.
                     if ffmpeg_location_for_ytdlp:

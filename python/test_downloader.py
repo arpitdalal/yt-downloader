@@ -1873,6 +1873,14 @@ class TestDownloadVideo:
             "/best[ext=mp4][vcodec^=h264][acodec^=aac]",
         ]
 
+    def test_mp4_preset_options_match_yt_dlp_cli_alias(self):
+        """Internal mp4 preset should map to yt-dlp's `-t mp4` behavior."""
+        assert YouTubeDownloader._mp4_preset_options() == {
+            "merge_output_format": "mp4",
+            "remuxvideo": "mp4",
+            "format_sort": ["vcodec:h264", "lang", "quality", "res", "fps", "hdr:12", "acodec:aac"],
+        }
+
     def test_browser_cookie_candidates_support_csv(self):
         with patch.dict(os.environ, {"YT_DLP_COOKIES_BROWSER": "chrome, edge,firefox"}, clear=False):
             candidates = YouTubeDownloader._browser_cookie_candidates()
@@ -2002,6 +2010,83 @@ class TestDownloadVideo:
                                         assert attempted_non_empty[:2] == [
                                             "nonexistent",
                                             default_selector,
+                                        ]
+
+    def test_download_applies_mp4_preset_options_to_yt_dlp(self, temp_dir, sample_video_info):
+        """Download attempts should include mp4 compatibility preset options."""
+        output_file = temp_dir / "output.mp4"
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.mp4"
+        downloaded_file.write_bytes(b"video data")
+        attempted_opts = []
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def download(self, _urls):
+                return None
+
+        downloader = YouTubeDownloader()
+        with patch.object(
+            downloader,
+            "extract_video_info",
+            return_value=VideoInfo(
+                id=sample_video_info["id"],
+                title=sample_video_info["title"],
+                duration=sample_video_info["duration"],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None,
+            ),
+        ):
+            with patch.object(downloader, "_get_temp_dir", return_value=temp_dir):
+                with patch.object(downloader, "_get_cached_video_path", return_value=None):
+                    with patch.object(
+                        downloader,
+                        "_find_downloaded_file",
+                        return_value=downloaded_file,
+                    ):
+                        with patch.object(downloader, "_check_file_stability", return_value=True):
+                            with patch("downloader.shutil.copy2") as mock_copy:
+
+                                def copy_side_effect(_src, dst):
+                                    Path(dst).write_bytes(b"copied data")
+
+                                mock_copy.side_effect = copy_side_effect
+                                with patch(
+                                    "downloader.yt_dlp.YoutubeDL",
+                                    side_effect=lambda opts: MockYDL(opts),
+                                ):
+                                    with patch("downloader.time.sleep"):
+                                        result = downloader.download_video(
+                                            "https://youtube.com/watch?v=test",
+                                            str(output_file),
+                                        )
+                                        assert result.success is True
+                                        assert attempted_opts
+                                        download_attempts = [opts for opts in attempted_opts if opts.get("format")]
+                                        assert download_attempts
+                                        first_attempt = download_attempts[0]
+                                        assert first_attempt.get("merge_output_format") == "mp4"
+                                        assert first_attempt.get("remuxvideo") == "mp4"
+                                        assert first_attempt.get("format_sort") == [
+                                            "vcodec:h264",
+                                            "lang",
+                                            "quality",
+                                            "res",
+                                            "fps",
+                                            "hdr:12",
+                                            "acodec:aac",
                                         ]
 
     def test_download_ffmpeg_merge_error_does_not_fallback_to_progressive(self, temp_dir, sample_video_info):
