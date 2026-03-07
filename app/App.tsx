@@ -479,9 +479,9 @@ export default function App() {
 		}
 		if (youtubeAuth.detectedBrowser) {
 			if (youtubeAuth.connected) {
-				return `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading).`;
+				return `Browser detected: ${youtubeAuth.detectedBrowser} (cookies available; cookie-based auth may be attempted during download).`;
 			}
-			return `Browser detected: ${youtubeAuth.detectedBrowser} (cookie auth currently disabled by environment).`;
+			return `Browser detected: ${youtubeAuth.detectedBrowser} (cookie-based auth is not currently enabled or may be unavailable).`;
 		}
 		return "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results.";
 	};

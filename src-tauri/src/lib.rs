@@ -454,14 +454,7 @@ fn cookie_browser_candidates() -> Vec<String> {
             .filter(|token| !token.is_empty())
             .collect()
     } else {
-        let mut merged = requested;
-        merged.extend(
-            default_cookie_browser_list()
-                .split(',')
-                .map(|token| token.trim().to_ascii_lowercase())
-                .filter(|token| !token.is_empty()),
-        );
-        merged
+        requested
     };
 
     for candidate in &mut candidates {
