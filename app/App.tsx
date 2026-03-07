@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type DownloadProgressData,
 	tauriAPI,
@@ -20,52 +20,70 @@ export default function App() {
 	const [localFile, setLocalFile] = useState<string | null>(null);
 	const [sections, setSections] = useState<Section[]>([{ start: "", end: "" }]);
 	const [status, setStatus] = useState<DownloadStatus>("idle");
+	const statusRef = useRef<DownloadStatus>("idle");
 	const [progress, setProgress] = useState(0);
+	const progressRef = useRef(0);
 	const [error, setError] = useState<string | null>(null);
 	const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
 	const [successMessage, setSuccessMessage] = useState<string | null>(null);
-	const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus>({
-		connected: false,
-		detectedBrowser: null,
-	});
+	const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus | null>(
+		null,
+	);
 
-	// Set up progress listener
+	const setStatusSynced = useCallback((next: DownloadStatus) => {
+		statusRef.current = next;
+		setStatus(next);
+	}, []);
+
+	const setProgressSynced = useCallback(
+		(next: number | ((previous: number) => number)) => {
+			const previous = progressRef.current;
+			const resolved =
+				typeof next === "function"
+					? (next as (previous: number) => number)(previous)
+					: next;
+			progressRef.current = resolved;
+			setProgress(resolved);
+		},
+		[],
+	);
+
+	// Set up progress listener once; use a ref to avoid resubscription races.
 	useEffect(() => {
 		tauriAPI.onDownloadProgress((data: DownloadProgressData) => {
-			if (status === "downloading") {
-				setProgress((previous) => {
-					if (
-						typeof data.percent === "number" &&
-						Number.isFinite(data.percent)
-					) {
-						return Math.min(99.5, Math.max(previous, data.percent));
-					}
-
-					if (
-						typeof data.downloadedBytes === "number" &&
-						typeof data.totalBytes === "number" &&
-						data.totalBytes > 0
-					) {
-						const derived = (data.downloadedBytes / data.totalBytes) * 100;
-						return Math.min(99.5, Math.max(previous, derived));
-					}
-
-					if (
-						typeof data.downloadedBytes === "number" &&
-						data.downloadedBytes > 0
-					) {
-						return Math.min(95, previous + 0.8);
-					}
-
-					return previous;
-				});
+			if (statusRef.current !== "downloading" || progressRef.current >= 100) {
+				return;
 			}
+
+			setProgressSynced((previous) => {
+				if (typeof data.percent === "number" && Number.isFinite(data.percent)) {
+					return Math.min(99.5, Math.max(previous, data.percent));
+				}
+
+				if (
+					typeof data.downloadedBytes === "number" &&
+					typeof data.totalBytes === "number" &&
+					data.totalBytes > 0
+				) {
+					const derived = (data.downloadedBytes / data.totalBytes) * 100;
+					return Math.min(99.5, Math.max(previous, derived));
+				}
+
+				if (
+					typeof data.downloadedBytes === "number" &&
+					data.downloadedBytes > 0
+				) {
+					return Math.min(95, previous + 0.8);
+				}
+
+				return previous;
+			});
 		});
 
 		return () => {
 			tauriAPI.removeDownloadProgressListener();
 		};
-	}, [status]);
+	}, [setProgressSynced]);
 
 	const refreshYouTubeAuthStatus = useCallback(async () => {
 		try {
@@ -91,6 +109,9 @@ export default function App() {
 		const message = error instanceof Error ? error.message : String(error);
 
 		// Map technical errors to user-friendly messages
+		if (message.toLowerCase().includes("input file not found")) {
+			return "The selected file was not found. It may have been moved or deleted.";
+		}
 		if (message.includes("Invalid input")) {
 			if (message.includes("URL")) {
 				return "Please enter a valid YouTube URL.";
@@ -120,7 +141,19 @@ export default function App() {
 		}
 		const requiresYouTubeSignIn = isYouTubeAuthError(message);
 		if (requiresYouTubeSignIn) {
-			return "YouTube requires sign-in for this video. Sign in to YouTube in your browser (e.g. Chrome) and try again.";
+			if (
+				youtubeAuth?.fetchPotEnabled &&
+				youtubeAuth.jsRuntimeAvailable === false
+			) {
+				return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again. If it still fails, install/update the app runtime bundle (JS runtime missing).";
+			}
+			return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again.";
+		}
+		if (
+			message.toLowerCase().includes("po token") ||
+			message.toLowerCase().includes("pot")
+		) {
+			return "YouTube verification failed while requesting PO token. Try again; if this persists, update app/runtime and ensure network allows YouTube JS requests.";
 		}
 		if (message.includes("High-quality stream is available up to")) {
 			return message;
@@ -292,20 +325,20 @@ export default function App() {
 		const validationError = validateSections();
 		if (validationError) {
 			setError(validationError);
-			setStatus("error");
+			setStatusSynced("error");
 			return;
 		}
 
 		// Reset state
 		setError(null);
 		setSuccessMessage(null);
-		setProgress(0);
+		setProgressSynced(0);
 		setVideoInfo(null);
 
 		try {
 			if (localFile) {
 				// Handle local file processing
-				setStatus("downloading"); // Use downloading state for processing UI
+				setStatusSynced("downloading"); // Use downloading state for processing UI
 
 				// Show save dialog
 				const originalFilename = localFile.split(/[/\\]/).pop() || "video.mp4";
@@ -316,13 +349,13 @@ export default function App() {
 				});
 
 				if (dialogResult.canceled) {
-					setStatus("idle");
+					setStatusSynced("idle");
 					return;
 				}
 
 				if (!dialogResult.filePath) {
 					setError("No file path selected");
-					setStatus("error");
+					setStatusSynced("error");
 					return;
 				}
 				// Convert sections to format expected by backend
@@ -337,13 +370,17 @@ export default function App() {
 					sections: sectionsArray,
 				});
 
-				setStatus("completed");
+				setStatusSynced("completed");
+				const requestedPath = dialogResult.filePath;
+				const finalPath = result.filePath || requestedPath;
 				setSuccessMessage(
-					`Processing completed! File saved to: ${result.filePath}`,
+					finalPath === requestedPath
+						? `Processing completed! File saved to: ${finalPath}`
+						: `Processing completed! File saved to: ${requestedPath} (finalized at: ${finalPath})`,
 				);
 			} else {
 				// Handle YouTube download
-				setStatus("extracting");
+				setStatusSynced("extracting");
 				const info = await tauriAPI.extractVideoInfo(url.trim());
 
 				if (!info) {
@@ -361,20 +398,20 @@ export default function App() {
 				});
 
 				if (dialogResult.canceled) {
-					setStatus("idle");
+					setStatusSynced("idle");
 					return;
 				}
 
 				if (!dialogResult.filePath) {
 					setError("No file path selected");
-					setStatus("error");
+					setStatusSynced("error");
 					return;
 				}
 				const savePath = dialogResult.filePath;
 
 				// Step 3: Start download
-				setStatus("downloading");
-				setProgress(0);
+				setStatusSynced("downloading");
+				setProgressSynced(0);
 
 				// Convert sections to format expected by backend
 				const sectionsArray = sections.map((s) => ({
@@ -388,10 +425,13 @@ export default function App() {
 					sections: sectionsArray,
 				});
 
-				setStatus("completed");
-				setProgress(100);
+				setStatusSynced("completed");
+				setProgressSynced(100);
+				const finalPath = result.filePath || savePath;
 				setSuccessMessage(
-					`Download completed! File saved to: ${result.filePath}`,
+					finalPath === savePath
+						? `Download completed! File saved to: ${finalPath}`
+						: `Download completed! File saved to: ${savePath} (finalized at: ${finalPath})`,
 				);
 			}
 
@@ -412,7 +452,7 @@ export default function App() {
 			if (isYouTubeAuthError(errorMessage)) {
 				void refreshYouTubeAuthStatus();
 			}
-			setStatus("error");
+			setStatusSynced("error");
 			setError(getErrorMessage(err));
 		}
 	};
@@ -420,8 +460,8 @@ export default function App() {
 	const handleCancel = async () => {
 		try {
 			await tauriAPI.cancelDownload();
-			setStatus("idle");
-			setProgress(0);
+			setStatusSynced("idle");
+			setProgressSynced(0);
 			setError(null);
 			setUrl("");
 			setLocalFile(null);
@@ -431,6 +471,32 @@ export default function App() {
 		} catch (err) {
 			console.error("Failed to cancel download:", err);
 		}
+	};
+
+	const buildYoutubeBrowserStatus = (): string => {
+		if (!youtubeAuth) {
+			return "Checking browser/runtime status...";
+		}
+		if (youtubeAuth.detectedBrowser) {
+			if (youtubeAuth.connected) {
+				return `Browser detected: ${youtubeAuth.detectedBrowser} (cookies available; cookie-based auth may be attempted during download).`;
+			}
+			return `Browser detected: ${youtubeAuth.detectedBrowser} (cookie-based auth is not currently enabled or may be unavailable).`;
+		}
+		return "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results.";
+	};
+
+	const buildFetchPotStatus = (): string => {
+		if (!youtubeAuth) {
+			return "Checking fetch_pot configuration...";
+		}
+		if (!youtubeAuth.fetchPotEnabled) {
+			return "fetch_pot is disabled by environment.";
+		}
+		if (youtubeAuth.jsRuntimeAvailable) {
+			return `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`;
+		}
+		return "JS runtime not detected (fetch_pot disabled for this run).";
 	};
 
 	return (
@@ -452,9 +518,7 @@ export default function App() {
 						YouTube
 					</h2>
 					<p className="text-sm text-gray-600">
-						{youtubeAuth.connected && youtubeAuth.detectedBrowser
-							? `Browser detected: ${youtubeAuth.detectedBrowser} (cookies used when downloading)`
-							: "No supported browser detected. Install Chrome or Firefox and sign in to YouTube for best results."}
+						{buildYoutubeBrowserStatus()} {buildFetchPotStatus()}
 					</p>
 				</div>
 

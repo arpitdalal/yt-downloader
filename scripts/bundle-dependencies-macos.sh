@@ -6,6 +6,7 @@ set -euo pipefail
 RESOURCES_ROOT="src-tauri/resources"
 PYTHON_DIR="$RESOURCES_ROOT/python"
 FFMPEG_DIR="$RESOURCES_ROOT/ffmpeg"
+JSRUNTIME_DIR="$RESOURCES_ROOT/jsruntime"
 
 is_truthy() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -16,8 +17,8 @@ is_truthy() {
 
 printf '%s\n' "Bundling dependencies for macOS (Tauri resources)..."
 
-rm -rf "$PYTHON_DIR" "$FFMPEG_DIR"
-mkdir -p "$PYTHON_DIR" "$FFMPEG_DIR"
+rm -rf "$PYTHON_DIR" "$FFMPEG_DIR" "$JSRUNTIME_DIR"
+mkdir -p "$PYTHON_DIR" "$FFMPEG_DIR" "$JSRUNTIME_DIR"
 
 printf '\n=== Step 1: Python ===\n'
 PYTHON_RELEASE_TAG="20260211"
@@ -75,7 +76,34 @@ find -L "$PYTHON_DIR" -type l -delete
 
 echo "OK: Python bundled at $PYTHON_DIR"
 
-printf '\n=== Step 2: FFmpeg ===\n'
+printf '\n=== Step 2: JS Runtime (Deno) ===\n'
+DENO_RELEASE_TAG="v2.7.1"
+case "$PYTHON_ARCH" in
+  arm64 | aarch64)
+    DENO_ARCHIVE_NAME="deno-aarch64-apple-darwin.zip"
+    DENO_SHA256="bc3392a0f50be9a1ecb68596530319308639a6f69d99678a0018c47e23a10c1f"
+    ;;
+  x86_64)
+    DENO_ARCHIVE_NAME="deno-x86_64-apple-darwin.zip"
+    DENO_SHA256="5478393fc9893c6f3516cee7579453a990834ceebf5ff44aaced2d0f285302d7"
+    ;;
+  *)
+    echo "Unsupported macOS architecture for bundled Deno: $PYTHON_ARCH"
+    exit 1
+    ;;
+esac
+
+DENO_URL="https://github.com/denoland/deno/releases/download/${DENO_RELEASE_TAG}/${DENO_ARCHIVE_NAME}"
+curl -fSL -o deno.zip "$DENO_URL"
+echo "$DENO_SHA256  deno.zip" | shasum -a 256 -c -
+unzip -o deno.zip -d "$JSRUNTIME_DIR"
+chmod +x "$JSRUNTIME_DIR/deno"
+rm -f deno.zip
+
+"$JSRUNTIME_DIR/deno" --version >/dev/null 2>&1 || { echo "ERROR: bundled deno binary does not execute"; exit 1; }
+echo "OK: JS runtime bundled at $JSRUNTIME_DIR"
+
+printf '\n=== Step 3: FFmpeg ===\n'
 case "$PYTHON_ARCH" in
   arm64 | aarch64)
     FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1766430132_8.0.1/ffmpeg.zip"
@@ -100,7 +128,7 @@ rm -f ffmpeg.zip
 "$FFMPEG_DIR/ffmpeg" -version >/dev/null 2>&1 || { echo "ERROR: bundled ffmpeg binary does not execute"; exit 1; }
 echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
-printf '\n=== Step 3: macOS code signing for bundled runtimes ===\n'
+printf '\n=== Step 4: macOS code signing for bundled runtimes ===\n'
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 REQUIRE_SIGNED_BUNDLED_RUNTIMES="${REQUIRE_SIGNED_BUNDLED_RUNTIMES:-false}"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
@@ -113,7 +141,7 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     if file -b "$candidate" | grep -q "Mach-O"; then
       codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$candidate"
     fi
-  done < <(find "$PYTHON_DIR" "$FFMPEG_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
+  done < <(find "$PYTHON_DIR" "$FFMPEG_DIR" "$JSRUNTIME_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
   echo "OK: bundled runtime binaries signed"
 else
   if is_truthy "$REQUIRE_SIGNED_BUNDLED_RUNTIMES"; then
@@ -124,10 +152,11 @@ else
 fi
 
 printf '\n=== Summary ===\n'
-if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" ]]; then
+if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" && -f "$JSRUNTIME_DIR/deno" ]]; then
   echo "All dependencies bundled for Tauri."
   echo "Python: $PYTHON_DIR/bin/python3"
   echo "Script: $PYTHON_DIR/downloader.py"
+  echo "JS runtime: $JSRUNTIME_DIR/deno"
   echo "FFmpeg: $FFMPEG_DIR/ffmpeg"
   echo "Next: pnpm tauri:build:mac"
 else

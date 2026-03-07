@@ -6,6 +6,7 @@ set -euo pipefail
 RESOURCES_ROOT="src-tauri/resources"
 PYTHON_DIR="$RESOURCES_ROOT/python"
 FFMPEG_DIR="$RESOURCES_ROOT/ffmpeg"
+JSRUNTIME_DIR="$RESOURCES_ROOT/jsruntime"
 
 printf '%s\n' "Bundling dependencies for Linux (Tauri resources)..."
 
@@ -16,8 +17,8 @@ if [[ "$OSTYPE" == darwin* ]]; then
   exit 1
 fi
 
-rm -rf "$PYTHON_DIR" "$FFMPEG_DIR"
-mkdir -p "$PYTHON_DIR" "$FFMPEG_DIR"
+rm -rf "$PYTHON_DIR" "$FFMPEG_DIR" "$JSRUNTIME_DIR"
+mkdir -p "$PYTHON_DIR" "$FFMPEG_DIR" "$JSRUNTIME_DIR"
 
 printf '\n=== Step 1: Python ===\n'
 PYTHON_RELEASE_TAG="20260211"
@@ -76,7 +77,33 @@ find -L "$PYTHON_DIR" -type l -delete
 
 echo "OK: Python bundled at $PYTHON_DIR"
 
-printf '\n=== Step 2: FFmpeg ===\n'
+printf '\n=== Step 2: JS Runtime (Node.js) ===\n'
+NODE_VERSION="v24.14.0"
+case "$PYTHON_ARCH" in
+  x86_64)
+    NODE_ARCHIVE_NAME="node-${NODE_VERSION}-linux-x64.tar.xz"
+    NODE_SHA256="41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df"
+    ;;
+  aarch64 | arm64)
+    NODE_ARCHIVE_NAME="node-${NODE_VERSION}-linux-arm64.tar.xz"
+    NODE_SHA256="e7adfca03d9173276114a6f2219df1a7d25e1bfd6bbd771d3f839118a2053094"
+    ;;
+  *)
+    echo "Unsupported Linux architecture for bundled Node.js: $PYTHON_ARCH"
+    exit 1
+    ;;
+esac
+NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_ARCHIVE_NAME}"
+curl -fSL -o node.tar.xz "$NODE_URL"
+echo "$NODE_SHA256  node.tar.xz" | sha256sum -c -
+tar -xf node.tar.xz -C "$JSRUNTIME_DIR" --strip-components=2 "${NODE_ARCHIVE_NAME%.tar.xz}/bin/node"
+chmod +x "$JSRUNTIME_DIR/node"
+rm -f node.tar.xz
+
+"$JSRUNTIME_DIR/node" --version >/dev/null 2>&1 || { echo "ERROR: bundled node binary does not execute"; exit 1; }
+echo "OK: JS runtime bundled at $JSRUNTIME_DIR"
+
+printf '\n=== Step 3: FFmpeg ===\n'
 # Pinned release (yt-dlp/FFmpeg-Builds). Upgrade by choosing a newer autobuild-* tag and updating SHA + archive base.
 FFMPEG_RELEASE_TAG="autobuild-2026-02-28-14-21"
 case "$PYTHON_ARCH" in
@@ -105,10 +132,11 @@ rm -f ffmpeg.tar.xz
 echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
 printf '\n=== Summary ===\n'
-if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" ]]; then
+if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" && -f "$JSRUNTIME_DIR/node" ]]; then
   echo "All dependencies bundled for Tauri."
   echo "Python: $PYTHON_DIR/bin/python3"
   echo "Script: $PYTHON_DIR/downloader.py"
+  echo "JS runtime: $JSRUNTIME_DIR/node"
   echo "FFmpeg: $FFMPEG_DIR/ffmpeg"
   echo "Next: pnpm tauri:build:linux"
 else

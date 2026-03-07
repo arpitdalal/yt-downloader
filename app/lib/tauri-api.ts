@@ -33,6 +33,9 @@ export interface LogInfo {
 export interface YouTubeAuthStatus {
 	connected: boolean;
 	detectedBrowser: string | null;
+	jsRuntimeAvailable: boolean;
+	jsRuntimeName: string | null;
+	fetchPotEnabled: boolean;
 }
 
 let unlistenDownloadProgress: UnlistenFn | null = null;
@@ -61,7 +64,7 @@ export const tauriAPI = {
 		const filePath = await save({
 			defaultPath,
 			filters: [
-				{ name: "Video Files", extensions: ["mp4", "webm", "mkv", "m4a"] },
+				{ name: "Video Files", extensions: ["mp4", "webm", "mkv"] },
 				{ name: "All Files", extensions: ["*"] },
 			],
 		});

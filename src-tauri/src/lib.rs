@@ -18,6 +18,10 @@ const ALLOWED_YOUTUBE_HOSTS: [&str; 4] = [
     "youtube-nocookie.com",
 ];
 
+const SUPPORTED_COOKIE_BROWSERS: [&str; 10] = [
+    "arc", "brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale",
+];
+
 type SharedDownloadState = Arc<DownloadState>;
 
 struct DownloadState {
@@ -89,6 +93,12 @@ pub struct YouTubeAuthStatus {
     pub connected: bool,
     /// First detected/supported browser name (e.g. "chrome").
     pub detected_browser: Option<String>,
+    /// True if bundled/system JS runtime for yt-dlp fetch_pot is available.
+    pub js_runtime_available: bool,
+    /// JS runtime name used for fetch_pot (e.g. "deno", "node").
+    pub js_runtime_name: Option<String>,
+    /// Whether fetch_pot integration is enabled.
+    pub fetch_pot_enabled: bool,
 }
 
 #[allow(dead_code)]
@@ -246,8 +256,8 @@ fn get_log_info(app: AppHandle) -> Result<LogInfo, String> {
 }
 
 #[tauri::command]
-fn get_youtube_auth_status(_app: AppHandle) -> Result<YouTubeAuthStatus, String> {
-    Ok(detected_browser_auth_status())
+fn get_youtube_auth_status(app: AppHandle) -> Result<YouTubeAuthStatus, String> {
+    Ok(detected_browser_auth_status(get_js_runtime_path(&app)))
 }
 
 fn run_extract_video_info(app: AppHandle, url: String) -> Result<VideoInfo, String> {
@@ -383,7 +393,7 @@ fn default_cookie_browser_list() -> &'static str {
 }
 
 fn yt_dlp_env_overrides(
-    _app: &AppHandle,
+    app: &AppHandle,
     ffmpeg_path: Option<&Path>,
 ) -> Vec<(&'static str, String)> {
     let mut env_overrides = Vec::new();
@@ -396,6 +406,25 @@ fn yt_dlp_env_overrides(
     let cookies_browser = env::var("YT_DLP_COOKIES_BROWSER")
         .unwrap_or_else(|_| default_cookie_browser_list().to_string());
     env_overrides.push(("YT_DLP_COOKIES_BROWSER", cookies_browser));
+
+    let enable_fetch_pot =
+        env::var("YT_DLP_ENABLE_FETCH_POT").unwrap_or_else(|_| "true".to_string());
+    env_overrides.push(("YT_DLP_ENABLE_FETCH_POT", enable_fetch_pot));
+
+    let disable_post_compat_normalization = env::var("YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION")
+        .unwrap_or_else(|_| "false".to_string());
+    env_overrides.push((
+        "YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION",
+        disable_post_compat_normalization,
+    ));
+
+    if let Some((runtime_path, runtime_name)) = get_js_runtime_path(app) {
+        env_overrides.push((
+            "YT_DLP_JS_RUNTIME_PATH",
+            runtime_path.to_string_lossy().to_string(),
+        ));
+        env_overrides.push(("YT_DLP_JS_RUNTIME_NAME", runtime_name));
+    }
     env_overrides
 }
 
@@ -403,13 +432,208 @@ fn download_env_overrides(app: &AppHandle, ffmpeg_path: &Path) -> Vec<(&'static 
     yt_dlp_env_overrides(app, Some(ffmpeg_path))
 }
 
-/// Returns auth status based on configured browser list (first browser = detected).
-fn detected_browser_auth_status() -> YouTubeAuthStatus {
-    let list = default_cookie_browser_list();
-    let first = list.split(',').next().map(|s| s.trim().to_string());
+/// Returns auth/runtime status based on configured browser list and runtime discovery.
+fn cookie_browser_candidates() -> Vec<String> {
+    let raw = env::var("YT_DLP_COOKIES_BROWSER").unwrap_or_default();
+    let requested: Vec<String> = raw
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter_map(|token| {
+            let trimmed = token.trim().to_ascii_lowercase();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .collect();
+
+    let mut candidates: Vec<String> = if requested.is_empty() {
+        default_cookie_browser_list()
+            .split(',')
+            .map(|token| token.trim().to_ascii_lowercase())
+            .filter(|token| !token.is_empty())
+            .collect()
+    } else {
+        requested
+    };
+
+    for candidate in &mut candidates {
+        if candidate == "google-chrome" {
+            *candidate = "chrome".to_string();
+        } else if candidate == "msedge" {
+            *candidate = "edge".to_string();
+        }
+    }
+
+    let mut unique: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if !SUPPORTED_COOKIE_BROWSERS.contains(&candidate.as_str()) {
+            continue;
+        }
+        if !unique.iter().any(|value| value == &candidate) {
+            unique.push(candidate);
+        }
+    }
+    unique
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+#[cfg(target_os = "macos")]
+fn arc_cookie_store_exists(user_data_dir: &Path) -> bool {
+    if user_data_dir.join("Default").join("Cookies").is_file() {
+        return true;
+    }
+
+    let entries = match std::fs::read_dir(user_data_dir) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let profile_name = entry.file_name();
+        let profile_name = profile_name.to_string_lossy();
+        if !profile_name.starts_with("Profile") {
+            continue;
+        }
+
+        if entry.path().join("Cookies").is_file() {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn browser_cookie_store_exists(browser: &str) -> bool {
+    let home = match user_home_dir() {
+        Some(home) => home,
+        None => return false,
+    };
+
+    match browser {
+        "arc" => arc_cookie_store_exists(&home.join("Library/Application Support/Arc/User Data")),
+        "chrome" => home
+            .join("Library/Application Support/Google/Chrome")
+            .exists(),
+        "safari" => home
+            .join("Library/Safari/Cookies/Cookies.binarycookies")
+            .exists()
+            || home
+                .join("Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies")
+                .exists(),
+        "firefox" => home
+            .join("Library/Application Support/Firefox/Profiles")
+            .exists(),
+        "edge" => home
+            .join("Library/Application Support/Microsoft Edge")
+            .exists(),
+        "brave" => home
+            .join("Library/Application Support/BraveSoftware/Brave-Browser")
+            .exists(),
+        "chromium" => home
+            .join("Library/Application Support/Chromium")
+            .exists(),
+        "opera" => home
+            .join("Library/Application Support/com.operasoftware.Opera")
+            .exists(),
+        "vivaldi" => home
+            .join("Library/Application Support/Vivaldi")
+            .exists(),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn browser_cookie_store_exists(browser: &str) -> bool {
+    let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let roaming_app_data = env::var_os("APPDATA").map(PathBuf::from);
+
+    match browser {
+        "edge" => local_app_data
+            .as_ref()
+            .map(|root| root.join("Microsoft/Edge/User Data").exists())
+            .unwrap_or(false),
+        "chrome" => local_app_data
+            .as_ref()
+            .map(|root| root.join("Google/Chrome/User Data").exists())
+            .unwrap_or(false),
+        "firefox" => roaming_app_data
+            .as_ref()
+            .map(|root| root.join("Mozilla/Firefox/Profiles").exists())
+            .unwrap_or(false),
+        "brave" => local_app_data
+            .as_ref()
+            .map(|root| root.join("BraveSoftware/Brave-Browser/User Data").exists())
+            .unwrap_or(false),
+        "chromium" => local_app_data
+            .as_ref()
+            .map(|root| root.join("Chromium/User Data").exists())
+            .unwrap_or(false),
+        "opera" => roaming_app_data
+            .as_ref()
+            .map(|root| root.join("Opera Software/Opera Stable").exists())
+            .unwrap_or(false),
+        "vivaldi" => local_app_data
+            .as_ref()
+            .map(|root| root.join("Vivaldi/User Data").exists())
+            .unwrap_or(false),
+        "whale" => local_app_data
+            .as_ref()
+            .map(|root| root.join("Naver/Naver Whale/User Data").exists())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn browser_cookie_store_exists(browser: &str) -> bool {
+    let home = match user_home_dir() {
+        Some(home) => home,
+        None => return false,
+    };
+
+    match browser {
+        "chrome" => home.join(".config/google-chrome").exists(),
+        "firefox" => home.join(".mozilla/firefox").exists(),
+        "chromium" => home.join(".config/chromium").exists(),
+        "edge" => home.join(".config/microsoft-edge").exists(),
+        "brave" => home.join(".config/BraveSoftware/Brave-Browser").exists(),
+        "opera" => home.join(".config/opera").exists(),
+        "vivaldi" => home.join(".config/vivaldi").exists(),
+        _ => false,
+    }
+}
+
+fn detect_available_cookie_browser() -> Option<String> {
+    cookie_browser_candidates()
+        .into_iter()
+        .find(|browser| browser_cookie_store_exists(browser))
+}
+
+fn detected_browser_auth_status(js_runtime: Option<(PathBuf, String)>) -> YouTubeAuthStatus {
+    let browser_cookies_enabled = env_truthy("YT_DLP_ENABLE_BROWSER_COOKIES", true);
+    let detected_browser = detect_available_cookie_browser();
+    let fetch_pot_enabled = env_truthy("YT_DLP_ENABLE_FETCH_POT", true);
     YouTubeAuthStatus {
-        connected: first.is_some(),
-        detected_browser: first,
+        connected: browser_cookies_enabled && detected_browser.is_some(),
+        detected_browser,
+        js_runtime_available: js_runtime.is_some(),
+        js_runtime_name: js_runtime.map(|(_, name)| name),
+        fetch_pot_enabled,
     }
 }
 
@@ -445,7 +669,13 @@ fn run_process_local_video(
     ];
 
     let python_dir = get_python_working_dir(&python_path);
-    let env_overrides = vec![("FFMPEG_PATH", ffmpeg_path.to_string_lossy().to_string())];
+    let mut env_overrides = vec![("FFMPEG_PATH", ffmpeg_path.to_string_lossy().to_string())];
+    let disable_post_compat_normalization = env::var("YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION")
+        .unwrap_or_else(|_| "false".to_string());
+    env_overrides.push((
+        "YT_DLP_DISABLE_POST_COMPAT_NORMALIZATION",
+        disable_post_compat_normalization,
+    ));
     let child = spawn_python_process(
         "Failed to start processing",
         &python_path,
@@ -851,6 +1081,146 @@ fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn env_truthy(var_name: &str, default: bool) -> bool {
+    match env::var(var_name) {
+        Ok(value) => {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        }
+        Err(_) => default,
+    }
+}
+
+fn normalize_runtime_name(raw: &str) -> Option<String> {
+    let lowered = raw.trim().to_ascii_lowercase();
+    match lowered.as_str() {
+        "deno" => Some("deno".into()),
+        "node" | "nodejs" => Some("node".into()),
+        _ => None,
+    }
+}
+
+fn infer_runtime_name_from_path(path: &Path) -> Option<String> {
+    let file_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_else(|| path.to_string_lossy().to_ascii_lowercase());
+    if file_name.contains("deno") {
+        return Some("deno".into());
+    }
+    if file_name.contains("node") {
+        return Some("node".into());
+    }
+    None
+}
+
+fn runtime_from_env_override() -> Option<(PathBuf, String)> {
+    let runtime_path = env::var_os("YT_DLP_JS_RUNTIME_PATH")?;
+    let path = PathBuf::from(runtime_path);
+    let path_str = path.to_string_lossy().to_string();
+    let valid_path =
+        path.exists() || (path.components().count() == 1 && command_available(&path_str));
+    if !valid_path {
+        return None;
+    }
+
+    let runtime_name = env::var("YT_DLP_JS_RUNTIME_NAME")
+        .ok()
+        .and_then(|value| normalize_runtime_name(&value))
+        .or_else(|| infer_runtime_name_from_path(&path))?;
+    Some((path, runtime_name))
+}
+
+fn packaged_js_runtime_path(app: &AppHandle) -> Option<(PathBuf, String)> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let (name, path) = if cfg!(target_os = "macos") {
+        (
+            "deno".to_string(),
+            resource_dir.join("jsruntime").join("deno"),
+        )
+    } else if cfg!(target_os = "windows") {
+        (
+            "node".to_string(),
+            resource_dir.join("jsruntime").join("node.exe"),
+        )
+    } else {
+        (
+            "node".to_string(),
+            resource_dir.join("jsruntime").join("node"),
+        )
+    };
+    if command_available(&path.to_string_lossy()) {
+        return Some((path, name));
+    }
+    None
+}
+
+fn resolve_dev_js_runtime_path() -> Option<(PathBuf, String)> {
+    if let Some(runtime) = runtime_from_env_override() {
+        return Some(runtime);
+    }
+
+    let bundled_runtime = if cfg!(target_os = "macos") {
+        (
+            project_root()
+                .join("src-tauri")
+                .join("resources")
+                .join("jsruntime")
+                .join("deno"),
+            "deno".to_string(),
+        )
+    } else if cfg!(target_os = "windows") {
+        (
+            project_root()
+                .join("src-tauri")
+                .join("resources")
+                .join("jsruntime")
+                .join("node.exe"),
+            "node".to_string(),
+        )
+    } else {
+        (
+            project_root()
+                .join("src-tauri")
+                .join("resources")
+                .join("jsruntime")
+                .join("node"),
+            "node".to_string(),
+        )
+    };
+
+    if bundled_runtime.0.exists() && command_available(&bundled_runtime.0.to_string_lossy()) {
+        return Some((bundled_runtime.0, bundled_runtime.1));
+    }
+
+    let runtime_candidates: &[(&str, &str)] = if cfg!(target_os = "macos") {
+        &[("deno", "deno"), ("node", "node")]
+    } else {
+        &[("node", "node"), ("deno", "deno")]
+    };
+    for (name, candidate) in runtime_candidates {
+        if command_available(candidate) {
+            return Some((PathBuf::from(candidate), (*name).to_string()));
+        }
+    }
+
+    None
+}
+
+fn get_js_runtime_path(app: &AppHandle) -> Option<(PathBuf, String)> {
+    if let Some(runtime) = runtime_from_env_override() {
+        return Some(runtime);
+    }
+
+    if is_dev_mode() {
+        return resolve_dev_js_runtime_path();
+    }
+
+    packaged_js_runtime_path(app)
+}
+
 fn project_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1002,6 +1372,11 @@ pub fn validate_local_process_input(
         return Err("Input path and save path are required".into());
     }
 
+    let input_path = PathBuf::from(options.input_path.trim());
+    if !input_path.exists() || !input_path.is_file() {
+        return Err("Input file not found".into());
+    }
+
     let validated_save_path = validate_save_path(&options.save_path)?;
     let validated_sections = if let Some(sections) = &options.sections {
         if sections.is_empty() {
@@ -1014,7 +1389,7 @@ pub fn validate_local_process_input(
     };
 
     Ok(ValidatedLocalProcessRequest {
-        input_path: PathBuf::from(options.input_path.trim()),
+        input_path,
         save_path: validated_save_path,
         sections: validated_sections,
     })
@@ -1331,6 +1706,33 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_local_input_file() {
+        let home = resolve_home_dir().expect("home dir should resolve");
+        let missing = env::temp_dir().join(format!(
+            "yt-downloader-missing-input-{}-{}.mp4",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        if missing.exists() {
+            let _ = std::fs::remove_file(&missing);
+        }
+        let options = ProcessLocalOptions {
+            input_path: missing.to_string_lossy().to_string(),
+            save_path: home
+                .join("Downloads/video.mp4")
+                .to_string_lossy()
+                .to_string(),
+            sections: None,
+        };
+
+        let err = validate_local_process_input(&options);
+        assert_eq!(
+            err.expect_err("expected local input validation to fail"),
+            "Input file not found"
+        );
+    }
+
+    #[test]
     fn resolves_dev_python_script_path_from_repo_root() {
         let repo_root = project_root();
         let path = resolve_dev_python_script_path(&repo_root);
@@ -1389,10 +1791,38 @@ mod tests {
     }
 
     #[test]
-    fn detected_browser_auth_status_returns_first_browser() {
-        let status = detected_browser_auth_status();
-        assert!(status.connected);
-        assert!(status.detected_browser.is_some());
+    fn detected_browser_auth_status_returns_runtime_status() {
+        let status = detected_browser_auth_status(Some((PathBuf::from("node"), "node".into())));
+        assert!(status.js_runtime_available);
+        assert_eq!(status.js_runtime_name.as_deref(), Some("node"));
+        assert_eq!(
+            status.fetch_pot_enabled,
+            env_truthy("YT_DLP_ENABLE_FETCH_POT", true)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn arc_cookie_store_exists_requires_cookie_db_file() {
+        let root = env::temp_dir().join(format!(
+            "yt-downloader-arc-cookie-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Profile 1")).expect("failed to create profile dir");
+        assert!(!arc_cookie_store_exists(&root));
+
+        std::fs::create_dir_all(root.join("Default")).expect("failed to create default dir");
+        std::fs::File::create(root.join("Default").join("Cookies"))
+            .expect("failed to create cookies db");
+        assert!(arc_cookie_store_exists(&root));
+        std::fs::remove_file(root.join("Default").join("Cookies"))
+            .expect("failed to remove default cookies db");
+        std::fs::File::create(root.join("Profile 1").join("Cookies"))
+            .expect("failed to create profile cookies db");
+        assert!(arc_cookie_store_exists(&root));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
