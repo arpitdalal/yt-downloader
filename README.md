@@ -77,12 +77,19 @@ For downloadable macOS releases, use Developer ID signing + notarization. Unsign
   - stream sorting prefers H.264 video + AAC audio for broad playback support
 - MP4-compatible fallback selectors are tried before any low-quality fallback.
 - App can enable yt-dlp `fetch_pot` when a JS runtime is available (macOS bundles Deno; Linux/Windows bundle Node.js).
-- UI shows passive “Browser detected: &lt;browser&gt;” when a supported browser (e.g. Chrome, Firefox) is found; cookies from that browser are used automatically for downloads.
-- Sign in to YouTube in your browser if a video requires it; the app will use those cookies on the next download.
+- UI provides cookie-source controls:
+  - Global default (`Auto` or specific browser profile), persisted in localStorage
+  - Per-download one-off override (`Use app default`, `Auto`, or specific source); resets after submit or cancel
+  - Refresh source discovery
+  - Stale selection handling: if the chosen source is no longer in the list (e.g. after refresh), global default and per-download override are reset to Auto / Use app default
+- Cookie source discovery/probing is cross-platform and profile-aware (macOS/Windows/Linux).
+- App sends explicit source selection to Python via `YT_DLP_COOKIE_SOURCES_JSON` + `YT_DLP_COOKIE_SELECTION_MODE`, and Python delegates cookie loading/decryption to yt-dlp.
 - See [docs/yt-dlp-presets.md](docs/yt-dlp-presets.md) for preset-alias details.
 - Optional env overrides:
   - `YT_DLP_ENABLE_BROWSER_COOKIES=false` — disable browser cookie attempts
   - `YT_DLP_COOKIES_BROWSER=arc,chrome,edge,firefox,safari` — control browser order
+  - `YT_DLP_COOKIE_SOURCES_JSON='[...]'` — explicit ordered cookie sources (takes precedence when app selection is provided)
+  - `YT_DLP_COOKIE_SELECTION_MODE=auto|manual` — explicit cookie selection mode (used with `YT_DLP_COOKIE_SOURCES_JSON`)
   - `YT_DLP_ENABLE_FETCH_POT=false` — disable fetch_pot attempts
   - `YT_DLP_JS_RUNTIME_PATH=/absolute/path/to/runtime` (or `node`/`deno` on PATH) — override JS runtime binary
   - `YT_DLP_JS_RUNTIME_NAME=deno|node` — override runtime name used for fetch_pot

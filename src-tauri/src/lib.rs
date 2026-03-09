@@ -8,6 +8,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use url::Url;
 
@@ -23,10 +24,19 @@ const SUPPORTED_COOKIE_BROWSERS: [&str; 10] = [
 ];
 
 type SharedDownloadState = Arc<DownloadState>;
+const COOKIE_SOURCE_CACHE_TTL: Duration = Duration::from_secs(30);
+const MAX_COOKIE_SOURCE_ATTEMPTS: usize = 6;
 
 struct DownloadState {
     current_process: Mutex<Option<Child>>,
     is_canceled: AtomicBool,
+    cookie_sources_cache: Mutex<Option<CookieSourceCache>>,
+}
+
+#[derive(Debug, Clone)]
+struct CookieSourceCache {
+    catalog: CookieSourceCatalog,
+    fetched_at: Instant,
 }
 
 impl Default for DownloadState {
@@ -34,6 +44,7 @@ impl Default for DownloadState {
         Self {
             current_process: Mutex::new(None),
             is_canceled: AtomicBool::new(false),
+            cookie_sources_cache: Mutex::new(None),
         }
     }
 }
@@ -57,6 +68,8 @@ pub struct VideoInfo {
     pub scheduled_start_time: Option<String>,
     pub thumbnail: Option<String>,
     pub uploader: Option<String>,
+    pub view_count: Option<i64>,
+    pub upload_date: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -102,6 +115,45 @@ pub struct YouTubeAuthStatus {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieSource {
+    pub id: String,
+    pub browser: String,
+    pub browser_label: String,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub profile_label: Option<String>,
+    #[serde(default)]
+    pub container: Option<String>,
+    #[serde(default)]
+    pub keyring: Option<String>,
+    pub available: bool,
+    pub has_youtube_cookies: bool,
+    pub has_youtube_auth_cookies: bool,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    pub priority: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieSourceCatalog {
+    pub sources: Vec<CookieSource>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CookieSelection {
+    pub mode: String,
+    #[serde(default)]
+    pub source_id: Option<String>,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadOptions {
@@ -113,6 +165,8 @@ pub struct DownloadOptions {
     pub end_time: Option<i64>,
     #[serde(default)]
     pub sections: Option<Vec<VideoSection>>,
+    #[serde(default)]
+    pub cookie_selection: Option<CookieSelection>,
 }
 
 #[allow(dead_code)]
@@ -159,6 +213,13 @@ struct PythonExtractResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct PythonCookieSourcesResponse {
+    success: bool,
+    sources: Option<Vec<CookieSource>>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct PythonDownloadResponse {
     success: bool,
     file_path: Option<String>,
@@ -173,10 +234,18 @@ struct ProcessOutput {
 }
 
 #[tauri::command]
-async fn extract_video_info(app: AppHandle, url: String) -> Result<VideoInfo, String> {
-    tauri::async_runtime::spawn_blocking(move || run_extract_video_info(app, url))
-        .await
-        .map_err(|error| format!("Failed to run video info extraction task: {error}"))?
+async fn extract_video_info(
+    app: AppHandle,
+    state: State<'_, SharedDownloadState>,
+    url: String,
+    cookie_selection: Option<CookieSelection>,
+) -> Result<VideoInfo, String> {
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_extract_video_info(app, shared_state, url, cookie_selection)
+    })
+    .await
+    .map_err(|error| format!("Failed to run video info extraction task: {error}"))?
 }
 
 #[tauri::command]
@@ -260,7 +329,22 @@ fn get_youtube_auth_status(app: AppHandle) -> Result<YouTubeAuthStatus, String> 
     Ok(detected_browser_auth_status(get_js_runtime_path(&app)))
 }
 
-fn run_extract_video_info(app: AppHandle, url: String) -> Result<VideoInfo, String> {
+#[tauri::command]
+fn list_youtube_cookie_sources(
+    app: AppHandle,
+    state: State<'_, SharedDownloadState>,
+    force_refresh: Option<bool>,
+) -> Result<CookieSourceCatalog, String> {
+    let shared_state = state.inner().clone();
+    load_cookie_source_catalog(&app, &shared_state, force_refresh.unwrap_or(false))
+}
+
+fn run_extract_video_info(
+    app: AppHandle,
+    state: SharedDownloadState,
+    url: String,
+    cookie_selection: Option<CookieSelection>,
+) -> Result<VideoInfo, String> {
     let validated_url = validate_youtube_url(&url).map_err(|e| format!("Invalid input: {e}"))?;
     let python_path = get_python_path(&app)?;
     let script_path = get_python_script_path(&app)?;
@@ -272,8 +356,15 @@ fn run_extract_video_info(app: AppHandle, url: String) -> Result<VideoInfo, Stri
         validated_url.clone(),
     ];
 
+    let selected_cookie_sources =
+        resolve_cookie_sources_for_selection(&app, &state, cookie_selection.as_ref())?;
     let python_dir = get_python_working_dir(&python_path);
-    let env_overrides = yt_dlp_env_overrides(&app, None);
+    let env_overrides = yt_dlp_env_overrides(
+        &app,
+        None,
+        cookie_selection.as_ref(),
+        selected_cookie_sources.as_deref(),
+    );
     info!("Extract video info started: url={}", validated_url);
     let child = spawn_python_process(
         "Failed to start download process",
@@ -343,8 +434,15 @@ fn run_download_video(
         validated.save_path.to_string_lossy().to_string(),
     ];
 
+    let selected_cookie_sources =
+        resolve_cookie_sources_for_selection(&app, &state, options.cookie_selection.as_ref())?;
     let python_dir = get_python_working_dir(&python_path);
-    let env_overrides = download_env_overrides(&app, &ffmpeg_path);
+    let env_overrides = download_env_overrides(
+        &app,
+        &ffmpeg_path,
+        options.cookie_selection.as_ref(),
+        selected_cookie_sources.as_deref(),
+    );
     info!(
         "Download started: url={} save_path={} sections={}",
         validated_url,
@@ -382,6 +480,133 @@ fn run_download_video(
     parse_download_result(&output.stdout, "Download failed")
 }
 
+fn load_cookie_source_catalog(
+    app: &AppHandle,
+    state: &SharedDownloadState,
+    force_refresh: bool,
+) -> Result<CookieSourceCatalog, String> {
+    if !force_refresh {
+        if let Ok(guard) = state.cookie_sources_cache.lock() {
+            if let Some(cache) = guard.as_ref() {
+                if cache.fetched_at.elapsed() < COOKIE_SOURCE_CACHE_TTL {
+                    return Ok(cache.catalog.clone());
+                }
+            }
+        }
+    }
+
+    let catalog = fetch_cookie_source_catalog_from_python(app)?;
+    let mut guard = state
+        .cookie_sources_cache
+        .lock()
+        .map_err(|_| "Failed to acquire cookie source cache lock".to_string())?;
+    *guard = Some(CookieSourceCache {
+        catalog: catalog.clone(),
+        fetched_at: Instant::now(),
+    });
+    Ok(catalog)
+}
+
+fn fetch_cookie_source_catalog_from_python(app: &AppHandle) -> Result<CookieSourceCatalog, String> {
+    let python_path = get_python_path(app)?;
+    let script_path = get_python_script_path(app)?;
+    validate_python_path_for_mode(&python_path)?;
+
+    let args = vec![
+        script_path.to_string_lossy().to_string(),
+        "--list-cookie-sources".to_string(),
+    ];
+    let python_dir = get_python_working_dir(&python_path);
+    let child = spawn_python_process(
+        "Failed to inspect cookie sources",
+        &python_path,
+        &args,
+        python_dir.as_deref(),
+        &[],
+    )?;
+    let output = run_untracked_process(child)?;
+    if !output.status.success() {
+        let stderr = output.stderr.trim();
+        let message = if stderr.is_empty() {
+            format!("Process exited with code {}", output.status)
+        } else {
+            stderr.to_string()
+        };
+        return Err(format!("Failed to list cookie sources: {message}"));
+    }
+
+    let value = parse_json_payload(&output.stdout)
+        .map_err(|error| format!("Failed to parse cookie source response: {error}"))?;
+    let response: PythonCookieSourcesResponse = serde_json::from_value(value)
+        .map_err(|error| format!("Failed to decode cookie source response: {error}"))?;
+    if !response.success {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Failed to list cookie sources".to_string()));
+    }
+    Ok(CookieSourceCatalog {
+        sources: response.sources.unwrap_or_default(),
+    })
+}
+
+fn resolve_cookie_sources_for_selection(
+    app: &AppHandle,
+    state: &SharedDownloadState,
+    selection: Option<&CookieSelection>,
+) -> Result<Option<Vec<CookieSource>>, String> {
+    let Some(selection) = selection else {
+        return Ok(None);
+    };
+
+    let mode = if selection.mode.eq_ignore_ascii_case("manual") {
+        "manual"
+    } else {
+        "auto"
+    };
+    let mut sources = match load_cookie_source_catalog(app, state, false) {
+        Ok(catalog) => catalog.sources,
+        Err(error) => {
+            if mode == "manual" {
+                return Err(error);
+            }
+            warn!(
+                "Cookie source auto selection failed, continuing without explicit sources: {error}"
+            );
+            return Ok(Some(vec![]));
+        }
+    };
+    sources.sort_by_key(|source| source.priority);
+
+    if mode == "manual" {
+        let source_id = selection
+            .source_id
+            .as_ref()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "Manual cookie selection requires sourceId".to_string())?;
+        let source = sources
+            .into_iter()
+            .find(|candidate| candidate.id == source_id)
+            .ok_or_else(|| format!("Selected cookie source not found: {source_id}"))?;
+        if !source.available {
+            let reason = source.last_error.as_deref().unwrap_or("unknown reason");
+            return Err(format!(
+                "Selected cookie source is unavailable: {} ({reason})",
+                source.browser_label
+            ));
+        }
+        return Ok(Some(vec![source]));
+    }
+
+    let mut auto_sources: Vec<CookieSource> = sources
+        .into_iter()
+        .filter(|source| source.available)
+        .take(MAX_COOKIE_SOURCE_ATTEMPTS)
+        .collect();
+    auto_sources.sort_by_key(|source| source.priority);
+    Ok(Some(auto_sources))
+}
+
 fn default_cookie_browser_list() -> &'static str {
     if cfg!(target_os = "macos") {
         "arc,chrome,safari,firefox,edge,brave,chromium,opera,vivaldi"
@@ -395,17 +620,34 @@ fn default_cookie_browser_list() -> &'static str {
 fn yt_dlp_env_overrides(
     app: &AppHandle,
     ffmpeg_path: Option<&Path>,
+    cookie_selection: Option<&CookieSelection>,
+    selected_cookie_sources: Option<&[CookieSource]>,
 ) -> Vec<(&'static str, String)> {
     let mut env_overrides = Vec::new();
     if let Some(path) = ffmpeg_path {
         env_overrides.push(("FFMPEG_PATH", path.to_string_lossy().to_string()));
     }
-    let enable_browser_cookies =
-        env::var("YT_DLP_ENABLE_BROWSER_COOKIES").unwrap_or_else(|_| "true".to_string());
-    env_overrides.push(("YT_DLP_ENABLE_BROWSER_COOKIES", enable_browser_cookies));
-    let cookies_browser = env::var("YT_DLP_COOKIES_BROWSER")
-        .unwrap_or_else(|_| default_cookie_browser_list().to_string());
-    env_overrides.push(("YT_DLP_COOKIES_BROWSER", cookies_browser));
+
+    if let Some(selection) = cookie_selection {
+        let mode = if selection.mode.eq_ignore_ascii_case("manual") {
+            "manual"
+        } else {
+            "auto"
+        };
+        let explicit_sources = selected_cookie_sources.unwrap_or(&[]);
+        let explicit_sources_json =
+            serde_json::to_string(explicit_sources).unwrap_or_else(|_| "[]".to_string());
+        env_overrides.push(("YT_DLP_ENABLE_BROWSER_COOKIES", "true".to_string()));
+        env_overrides.push(("YT_DLP_COOKIE_SELECTION_MODE", mode.to_string()));
+        env_overrides.push(("YT_DLP_COOKIE_SOURCES_JSON", explicit_sources_json));
+    } else {
+        let enable_browser_cookies =
+            env::var("YT_DLP_ENABLE_BROWSER_COOKIES").unwrap_or_else(|_| "true".to_string());
+        env_overrides.push(("YT_DLP_ENABLE_BROWSER_COOKIES", enable_browser_cookies));
+        let cookies_browser = env::var("YT_DLP_COOKIES_BROWSER")
+            .unwrap_or_else(|_| default_cookie_browser_list().to_string());
+        env_overrides.push(("YT_DLP_COOKIES_BROWSER", cookies_browser));
+    }
 
     let enable_fetch_pot =
         env::var("YT_DLP_ENABLE_FETCH_POT").unwrap_or_else(|_| "true".to_string());
@@ -428,8 +670,18 @@ fn yt_dlp_env_overrides(
     env_overrides
 }
 
-fn download_env_overrides(app: &AppHandle, ffmpeg_path: &Path) -> Vec<(&'static str, String)> {
-    yt_dlp_env_overrides(app, Some(ffmpeg_path))
+fn download_env_overrides(
+    app: &AppHandle,
+    ffmpeg_path: &Path,
+    cookie_selection: Option<&CookieSelection>,
+    selected_cookie_sources: Option<&[CookieSource]>,
+) -> Vec<(&'static str, String)> {
+    yt_dlp_env_overrides(
+        app,
+        Some(ffmpeg_path),
+        cookie_selection,
+        selected_cookie_sources,
+    )
 }
 
 /// Returns auth/runtime status based on configured browser list and runtime discovery.
@@ -1564,7 +1816,8 @@ pub fn run() {
             process_local_video,
             cancel_download,
             get_log_info,
-            get_youtube_auth_status
+            get_youtube_auth_status,
+            list_youtube_cookie_sources
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1680,6 +1933,7 @@ mod tests {
                     end: None,
                 },
             ]),
+            cookie_selection: None,
         };
 
         let validated = validate_download_input(&options).expect("expected valid download options");
@@ -1767,6 +2021,51 @@ mod tests {
         assert_eq!(parsed.percent, Some(25.0));
         assert_eq!(parsed.downloaded_bytes, Some(25));
         assert_eq!(parsed.total_bytes, Some(100));
+    }
+
+    #[test]
+    fn parses_python_extract_response_with_video_metadata_fields() {
+        let payload = serde_json::json!({
+            "success": true,
+            "video_info": {
+                "id": "abc123",
+                "title": "Video",
+                "duration": 120,
+                "is_live": false,
+                "is_scheduled": false,
+                "scheduled_start_time": null,
+                "thumbnail": null,
+                "uploader": "Uploader",
+                "view_count": 42,
+                "upload_date": "20260101"
+            },
+            "error": null
+        });
+
+        let parsed: PythonExtractResponse =
+            serde_json::from_value(payload).expect("response should deserialize");
+        let info = parsed.video_info.expect("video info should exist");
+        assert_eq!(info.view_count, Some(42));
+        assert_eq!(info.upload_date.as_deref(), Some("20260101"));
+    }
+
+    #[test]
+    fn video_info_defaults_optional_metadata_when_missing() {
+        let payload = serde_json::json!({
+            "id": "abc123",
+            "title": "Video",
+            "duration": null,
+            "is_live": false,
+            "is_scheduled": false,
+            "scheduled_start_time": null,
+            "thumbnail": null,
+            "uploader": null
+        });
+
+        let parsed: VideoInfo =
+            serde_json::from_value(payload).expect("video info should deserialize");
+        assert_eq!(parsed.view_count, None);
+        assert_eq!(parsed.upload_date, None);
     }
 
     #[test]
