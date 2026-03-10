@@ -1896,10 +1896,109 @@ class TestDownloadVideo:
             candidates = YouTubeDownloader._browser_cookie_candidates()
             assert candidates[:3] == ["chrome", "edge", "firefox"]
 
+    def test_discover_firefox_profiles_scans_root_and_profiles_subdir_without_duplicates(self, temp_dir):
+        xdg_config = temp_dir / "xdg"
+        home = temp_dir / "home"
+        root = xdg_config / "mozilla" / "firefox"
+        profile_from_profiles_dir = root / "Profiles" / "alpha.default-release"
+        profile_from_root = root / "beta.dev"
+        for profile in [profile_from_profiles_dir, profile_from_root]:
+            profile.mkdir(parents=True, exist_ok=True)
+            (profile / "cookies.sqlite").write_bytes(b"cookie-db")
+
+        with patch("downloader.sys.platform", "linux"):
+            with patch("downloader.Path.home", return_value=home):
+                with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg_config)}, clear=True):
+                    sources = YouTubeDownloader._discover_firefox_profiles()
+
+        discovered_paths = [source["profile"] for source in sources]
+        assert str(profile_from_profiles_dir) in discovered_paths
+        assert str(profile_from_root) in discovered_paths
+        assert len(discovered_paths) == len(set(discovered_paths))
+
     def test_browser_cookie_candidates_no_fallback_when_disabled(self):
         with patch.dict(os.environ, {"YT_DLP_COOKIES_BROWSER": "arc"}, clear=True):
             candidates = YouTubeDownloader._browser_cookie_candidates(include_default_fallback=False)
             assert candidates == ["arc"]
+
+    def test_resolve_cookie_attempt_sources_manual_uses_explicit_source(self):
+        downloader = YouTubeDownloader()
+        with patch.dict(
+            os.environ,
+            {
+                "YT_DLP_COOKIE_SELECTION_MODE": "manual",
+                "YT_DLP_COOKIE_SOURCES_JSON": json.dumps(
+                    [
+                        {
+                            "id": "chrome_default",
+                            "browser": "chrome",
+                            "profile": "/tmp/chrome-default",
+                            "priority": 0,
+                        }
+                    ]
+                ),
+            },
+            clear=True,
+        ):
+            sources, error = downloader._resolve_cookie_attempt_sources()
+            assert error is None
+            assert len(sources) == 1
+            assert sources[0]["id"] == "chrome_default"
+            assert sources[0]["cookiesfrombrowser"] == ("chrome", "/tmp/chrome-default")
+
+    def test_resolve_cookie_attempt_sources_manual_errors_when_unusable(self):
+        downloader = YouTubeDownloader()
+        with patch.dict(
+            os.environ,
+            {
+                "YT_DLP_COOKIE_SELECTION_MODE": "manual",
+                "YT_DLP_COOKIE_SOURCES_JSON": json.dumps(
+                    [{"id": "arc_missing", "browser": "arc", "profile": None, "priority": 0}]
+                ),
+            },
+            clear=True,
+        ):
+            with patch.object(YouTubeDownloader, "_arc_cookie_profile_path", return_value=None):
+                sources, error = downloader._resolve_cookie_attempt_sources()
+                assert sources == []
+                assert isinstance(error, str)
+                assert "unavailable" in error.lower()
+
+    def test_resolve_cookie_attempt_sources_auto_dedupes_equivalent_sources(self):
+        downloader = YouTubeDownloader()
+        with patch.dict(
+            os.environ,
+            {
+                "YT_DLP_COOKIE_SELECTION_MODE": "auto",
+                "YT_DLP_COOKIE_SOURCES_JSON": json.dumps(
+                    [
+                        {"id": "chrome_1", "browser": "chrome", "profile": "/tmp/p1", "priority": 0},
+                        {"id": "chrome_2", "browser": "chrome", "profile": "/tmp/p1", "priority": 1},
+                    ]
+                ),
+            },
+            clear=True,
+        ):
+            sources, error = downloader._resolve_cookie_attempt_sources()
+            assert error is None
+            assert len(sources) == 1
+            assert sources[0]["cookiesfrombrowser"] == ("chrome", "/tmp/p1")
+
+    def test_resolve_cookie_attempt_sources_explicit_empty_disables_legacy_fallback(self):
+        downloader = YouTubeDownloader()
+        with patch.dict(
+            os.environ,
+            {
+                "YT_DLP_COOKIE_SELECTION_MODE": "auto",
+                "YT_DLP_COOKIE_SOURCES_JSON": "[]",
+                "YT_DLP_ENABLE_BROWSER_COOKIES": "true",
+                "YT_DLP_COOKIES_BROWSER": "chrome",
+            },
+            clear=True,
+        ):
+            sources, error = downloader._resolve_cookie_attempt_sources()
+            assert error is None
+            assert sources == []
 
     def test_resolve_runtime_executable_accepts_command_name(self):
         with patch("downloader.shutil.which", return_value="/usr/bin/node"):

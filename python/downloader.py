@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yt_dlp
+from yt_dlp import cookies as yt_dlp_cookies
 
 # Constants
 CUT_FILE_MARKER = "_cut_"  # Marker for cut files to distinguish from originals
@@ -30,6 +31,16 @@ RETRY_BACKOFF_MULTIPLIER = 1.5
 INCOMPLETE_FILE_EXTENSIONS = (".part", ".ytdl")
 VIDEO_EXTENSIONS = ["mp4", "webm", "mkv", "m4a", "flv", "avi", "mov"]
 CACHE_KEY_VERSION = "hqv4"
+MAX_COOKIE_SOURCE_ATTEMPTS = 6
+YOUTUBE_COOKIE_AUTH_MARKERS = {
+    "SID",
+    "SAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+}
+YOUTUBE_COOKIE_DOMAIN_MARKERS = ("youtube.com", "google.com")
 SUPPORTED_COOKIE_BROWSERS = {
     "brave",
     "chrome",
@@ -199,6 +210,7 @@ class YouTubeDownloader:
         self._last_extract_url: str | None = None
         self._last_extract_info: dict | None = None
         self._last_extract_ydl_opts: dict | None = None
+        self._last_extract_error: str | None = None
 
     def _get_temp_dir(self) -> Path:
         """Get OS-aware temporary directory"""
@@ -354,6 +366,398 @@ class YouTubeDownloader:
             ]
         return ["chrome", "firefox", "chromium", "edge", "brave", "opera", "vivaldi"]
 
+    @staticmethod
+    def _cookie_selection_mode_from_env() -> str:
+        mode = os.environ.get("YT_DLP_COOKIE_SELECTION_MODE", "").strip().lower()
+        return "manual" if mode == "manual" else "auto"
+
+    @staticmethod
+    def _browser_label(browser: str) -> str:
+        labels = {
+            "arc": "Arc",
+            "brave": "Brave",
+            "chrome": "Chrome",
+            "chromium": "Chromium",
+            "edge": "Edge",
+            "firefox": "Firefox",
+            "opera": "Opera",
+            "safari": "Safari",
+            "vivaldi": "Vivaldi",
+            "whale": "Whale",
+        }
+        return labels.get(browser, browser.title())
+
+    @staticmethod
+    def _normalize_cookie_browser(browser: str) -> str | None:
+        normalized = {
+            "google-chrome": "chrome",
+            "msedge": "edge",
+        }.get(str(browser or "").strip().lower(), str(browser or "").strip().lower())
+        if normalized == "arc":
+            return "arc"
+        if normalized in SUPPORTED_COOKIE_BROWSERS:
+            return normalized
+        return None
+
+    @staticmethod
+    def _is_path_token(value: str | None) -> bool:
+        if not value:
+            return False
+        token = str(value).strip()
+        if not token:
+            return False
+        return token.startswith("~") or os.path.isabs(token) or "/" in token or "\\" in token
+
+    @staticmethod
+    def _stable_cookie_source_id(browser: str, profile: str | None, container: str | None) -> str:
+        raw = "|".join([browser, profile or "", container or ""])
+        safe = re.sub(r"[^a-zA-Z0-9_.-]+", "_", raw).strip("_")
+        return safe or f"{browser}_default"
+
+    @staticmethod
+    def _safe_cookie_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    @classmethod
+    def _new_cookie_source(
+        cls,
+        *,
+        browser: str,
+        profile: str | None,
+        profile_label: str | None,
+        container: str | None,
+        keyring: str | None,
+        priority: int,
+    ) -> dict:
+        return {
+            "id": cls._stable_cookie_source_id(browser, profile, container),
+            "browser": browser,
+            "browserLabel": cls._browser_label(browser),
+            "profile": profile,
+            "profileLabel": profile_label,
+            "container": container,
+            "keyring": keyring,
+            "available": True,
+            "hasYoutubeCookies": False,
+            "hasYoutubeAuthCookies": False,
+            "lastError": None,
+            "priority": priority,
+        }
+
+    @staticmethod
+    def _discover_chromium_profiles(
+        browser: str,
+        user_data_dir: Path,
+        priority_base: int,
+        *,
+        supports_profiles: bool = True,
+    ) -> list[dict]:
+        if not user_data_dir.exists():
+            return []
+        if not supports_profiles:
+            try:
+                cookie_files = sorted(
+                    [path for path in user_data_dir.rglob("Cookies") if path.is_file()],
+                    key=YouTubeDownloader._safe_cookie_mtime,
+                    reverse=True,
+                )
+            except OSError:
+                cookie_files = []
+            if cookie_files:
+                return [
+                    {
+                        "browser": browser,
+                        "profile": str(cookie_files[0].parent),
+                        "profileLabel": "Default",
+                        "priority": priority_base,
+                    }
+                ]
+            return []
+
+        candidates: list[tuple[Path, str]] = []
+        default_dir = user_data_dir / "Default"
+        if (default_dir / "Cookies").is_file():
+            candidates.append((default_dir, "Default"))
+        try:
+            for entry in user_data_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                if entry.name == "Default" or entry.name.startswith("Profile "):
+                    if (entry / "Cookies").is_file():
+                        candidates.append((entry, entry.name))
+        except OSError:
+            return []
+
+        candidates.sort(key=lambda item: YouTubeDownloader._safe_cookie_mtime(item[0] / "Cookies"), reverse=True)
+        return [
+            {
+                "browser": browser,
+                "profile": str(profile_dir),
+                "profileLabel": profile_label,
+                "priority": priority_base + idx,
+            }
+            for idx, (profile_dir, profile_label) in enumerate(candidates)
+        ]
+
+    @staticmethod
+    def _discover_firefox_profiles() -> list[dict]:
+        roots: list[Path] = []
+        home = Path.home()
+        if sys.platform.startswith("win"):
+            roaming = os.environ.get("APPDATA")
+            local = os.environ.get("LOCALAPPDATA")
+            if roaming:
+                roots.append(Path(roaming) / "Mozilla" / "Firefox" / "Profiles")
+            if local:
+                roots.append(
+                    Path(local)
+                    / "Packages"
+                    / "Mozilla.Firefox_n80bbvh6b1yt2"
+                    / "LocalCache"
+                    / "Roaming"
+                    / "Mozilla"
+                    / "Firefox"
+                    / "Profiles"
+                )
+        elif sys.platform == "darwin":
+            roots.append(home / "Library" / "Application Support" / "Firefox" / "Profiles")
+        else:
+            xdg_config = os.environ.get("XDG_CONFIG_HOME")
+            if xdg_config:
+                roots.append(Path(xdg_config) / "mozilla" / "firefox")
+            roots.extend(
+                [
+                    home / ".mozilla" / "firefox",
+                    home / ".var" / "app" / "org.mozilla.firefox" / "config" / "mozilla" / "firefox",
+                    home / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+                    home / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+                ]
+            )
+
+        scan_roots: dict[str, Path] = {}
+        for root in roots:
+            if not root.exists():
+                continue
+            scan_roots[str(root)] = root
+            profiles_dir = root / "Profiles"
+            if profiles_dir.is_dir():
+                scan_roots[str(profiles_dir)] = profiles_dir
+
+        profiles: list[Path] = []
+        for root in scan_roots.values():
+            try:
+                for entry in root.iterdir():
+                    if entry.is_dir() and (entry / "cookies.sqlite").is_file():
+                        profiles.append(entry)
+            except OSError:
+                continue
+
+        unique: dict[str, Path] = {}
+        for profile in profiles:
+            unique[str(profile)] = profile
+
+        sorted_profiles = sorted(
+            unique.values(),
+            key=lambda p: YouTubeDownloader._safe_cookie_mtime(p / "cookies.sqlite"),
+            reverse=True,
+        )
+        return [
+            {
+                "browser": "firefox",
+                "profile": str(profile),
+                "profileLabel": profile.name,
+            }
+            for profile in sorted_profiles
+        ]
+
+    @staticmethod
+    def _discover_safari_sources() -> list[dict]:
+        if sys.platform != "darwin":
+            return []
+        home = Path.home()
+        candidates = [
+            home / "Library" / "Cookies" / "Cookies.binarycookies",
+            home
+            / "Library"
+            / "Containers"
+            / "com.apple.Safari"
+            / "Data"
+            / "Library"
+            / "Cookies"
+            / "Cookies.binarycookies",
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return [
+                    {
+                        "browser": "safari",
+                        "profile": str(candidate),
+                        "profileLabel": candidate.name,
+                    }
+                ]
+        return []
+
+    @classmethod
+    def _discover_cookie_sources(cls) -> list[dict]:
+        discovered: list[dict] = []
+        priority = 0
+        home = Path.home()
+
+        browser_roots: dict[str, Path] = {}
+        if sys.platform == "darwin":
+            app_support = home / "Library" / "Application Support"
+            browser_roots = {
+                "arc": app_support / "Arc" / "User Data",
+                "chrome": app_support / "Google" / "Chrome",
+                "edge": app_support / "Microsoft Edge",
+                "brave": app_support / "BraveSoftware" / "Brave-Browser",
+                "chromium": app_support / "Chromium",
+                "vivaldi": app_support / "Vivaldi",
+                "whale": app_support / "Naver" / "Whale",
+                "opera": app_support / "com.operasoftware.Opera",
+            }
+        elif sys.platform.startswith("win"):
+            local_raw = os.environ.get("LOCALAPPDATA", "").strip()
+            roaming_raw = os.environ.get("APPDATA", "").strip()
+            if local_raw:
+                local = Path(local_raw)
+                browser_roots.update(
+                    {
+                        "chrome": local / "Google" / "Chrome" / "User Data",
+                        "edge": local / "Microsoft" / "Edge" / "User Data",
+                        "brave": local / "BraveSoftware" / "Brave-Browser" / "User Data",
+                        "chromium": local / "Chromium" / "User Data",
+                        "vivaldi": local / "Vivaldi" / "User Data",
+                        "whale": local / "Naver" / "Naver Whale" / "User Data",
+                    }
+                )
+            if roaming_raw:
+                roaming = Path(roaming_raw)
+                browser_roots["opera"] = roaming / "Opera Software" / "Opera Stable"
+        else:
+            config = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config")))
+            browser_roots = {
+                "chrome": config / "google-chrome",
+                "edge": config / "microsoft-edge",
+                "brave": config / "BraveSoftware" / "Brave-Browser",
+                "chromium": config / "chromium",
+                "vivaldi": config / "vivaldi",
+                "whale": config / "naver-whale",
+                "opera": config / "opera",
+            }
+
+        for browser in cls._default_cookie_browser_candidates():
+            normalized_browser = cls._normalize_cookie_browser(browser)
+            if not normalized_browser:
+                continue
+            if normalized_browser == "safari":
+                for source in cls._discover_safari_sources():
+                    discovered.append(
+                        cls._new_cookie_source(
+                            browser=source["browser"],
+                            profile=source.get("profile"),
+                            profile_label=source.get("profileLabel"),
+                            container=None,
+                            keyring=None,
+                            priority=priority,
+                        )
+                    )
+                    priority += 1
+                continue
+            if normalized_browser == "firefox":
+                for source in cls._discover_firefox_profiles():
+                    discovered.append(
+                        cls._new_cookie_source(
+                            browser="firefox",
+                            profile=source.get("profile"),
+                            profile_label=source.get("profileLabel"),
+                            container=None,
+                            keyring=None,
+                            priority=priority,
+                        )
+                    )
+                    priority += 1
+                continue
+
+            root = browser_roots.get(normalized_browser)
+            if not root:
+                continue
+            supports_profiles = normalized_browser != "opera"
+            for source in cls._discover_chromium_profiles(
+                normalized_browser,
+                root,
+                priority,
+                supports_profiles=supports_profiles,
+            ):
+                discovered.append(
+                    cls._new_cookie_source(
+                        browser=source["browser"],
+                        profile=source.get("profile"),
+                        profile_label=source.get("profileLabel"),
+                        container=None,
+                        keyring=None,
+                        priority=source.get("priority", priority),
+                    )
+                )
+                priority += 1
+
+        deduped: dict[str, dict] = {}
+        for source in discovered:
+            deduped[source["id"]] = source
+        return sorted(deduped.values(), key=lambda item: int(item.get("priority") or 0))
+
+    @classmethod
+    def _probe_cookie_source(cls, source: dict) -> dict:
+        browser = cls._normalize_cookie_browser(str(source.get("browser") or ""))
+        if not browser:
+            source["available"] = False
+            source["lastError"] = "Unsupported browser"
+            return source
+
+        target_browser = "chrome" if browser == "arc" else browser
+        profile = source.get("profile")
+        keyring = source.get("keyring")
+        container = source.get("container")
+        try:
+            jar = yt_dlp_cookies.extract_cookies_from_browser(
+                target_browser,
+                profile=profile,
+                keyring=keyring,
+                container=container,
+            )
+        except Exception as error:
+            source["available"] = False
+            source["hasYoutubeCookies"] = False
+            source["hasYoutubeAuthCookies"] = False
+            source["lastError"] = cls._truncate_error_message(str(error), limit=180)
+            return source
+
+        source["available"] = True
+        source["lastError"] = None
+        has_youtube = False
+        has_auth = False
+        for cookie in jar:
+            domain = str(getattr(cookie, "domain", "") or "").lower().lstrip(".")
+            name = str(getattr(cookie, "name", "") or "")
+            if any(domain_marker in domain for domain_marker in YOUTUBE_COOKIE_DOMAIN_MARKERS):
+                has_youtube = True
+                if name in YOUTUBE_COOKIE_AUTH_MARKERS:
+                    has_auth = True
+            if has_youtube and has_auth:
+                break
+
+        source["hasYoutubeCookies"] = has_youtube
+        source["hasYoutubeAuthCookies"] = has_auth
+        return source
+
+    @classmethod
+    def list_cookie_sources(cls) -> list[dict]:
+        sources = cls._discover_cookie_sources()
+        return [cls._probe_cookie_source(source) for source in sources]
+
     @classmethod
     def _browser_cookie_candidates(cls, include_default_fallback: bool = True) -> list[str]:
         raw = os.environ.get("YT_DLP_COOKIES_BROWSER", "").strip().lower()
@@ -403,7 +807,77 @@ class YouTubeDownloader:
                 return str(profile_dir)
         return None
 
-    def _cookiesfrombrowser_option(self, browser: str) -> tuple[str, ...] | None:
+    @classmethod
+    def _cookie_sources_from_env_json(cls) -> list[dict]:
+        raw = os.environ.get("YT_DLP_COOKIE_SOURCES_JSON", "").strip()
+        if not raw:
+            return []
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+
+        sources: list[dict] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            browser = cls._normalize_cookie_browser(str(item.get("browser") or ""))
+            if not browser:
+                continue
+            source = {
+                "id": str(
+                    item.get("id")
+                    or cls._stable_cookie_source_id(
+                        browser,
+                        item.get("profile"),
+                        item.get("container"),
+                    )
+                ),
+                "browser": browser,
+                "browserLabel": item.get("browserLabel") or cls._browser_label(browser),
+                "profile": item.get("profile"),
+                "profileLabel": item.get("profileLabel"),
+                "container": item.get("container"),
+                "keyring": item.get("keyring"),
+                "available": bool(item.get("available", True)),
+                "hasYoutubeCookies": bool(item.get("hasYoutubeCookies", False)),
+                "hasYoutubeAuthCookies": bool(item.get("hasYoutubeAuthCookies", False)),
+                "lastError": item.get("lastError"),
+                "priority": int(item.get("priority") or 0),
+            }
+            sources.append(source)
+        return sources
+
+    @classmethod
+    def _cookiesfrombrowser_option_for_source(cls, source: dict) -> tuple[object, ...] | None:
+        browser = cls._normalize_cookie_browser(str(source.get("browser") or ""))
+        if not browser:
+            return None
+
+        profile = source.get("profile")
+        container = source.get("container")
+        keyring = source.get("keyring")
+        browser_name = "chrome" if browser == "arc" else browser
+        if browser_name not in SUPPORTED_COOKIE_BROWSERS:
+            return None
+
+        if profile is None and browser == "arc":
+            profile = cls._arc_cookie_profile_path()
+            if not profile:
+                return None
+
+        parts: list[object] = [browser_name]
+        if profile is not None or keyring is not None or container is not None:
+            parts.append(profile)
+        if keyring is not None or container is not None:
+            parts.append(keyring)
+        if container is not None:
+            parts.append(container)
+        return tuple(parts)
+
+    def _cookiesfrombrowser_option(self, browser: str) -> tuple[object, ...] | None:
         if browser == "arc":
             profile = self._arc_cookie_profile_path()
             if profile:
@@ -412,6 +886,67 @@ class YouTubeDownloader:
         if browser in SUPPORTED_COOKIE_BROWSERS:
             return (browser,)
         return None
+
+    def _resolve_cookie_attempt_sources(self) -> tuple[list[dict], str | None]:
+        raw_explicit_sources = os.environ.get("YT_DLP_COOKIE_SOURCES_JSON")
+        has_explicit_sources = raw_explicit_sources is not None and bool(raw_explicit_sources.strip())
+        explicit_sources = self._cookie_sources_from_env_json()
+        selection_mode = self._cookie_selection_mode_from_env()
+        if has_explicit_sources:
+            resolved: list[dict] = []
+            dedupe: set[tuple[object, ...]] = set()
+            source_errors: list[str] = []
+            for source in explicit_sources:
+                cookiesfrombrowser = self._cookiesfrombrowser_option_for_source(source)
+                if not cookiesfrombrowser:
+                    source_errors.append(f"{source.get('browserLabel') or source.get('browser')}: unavailable profile")
+                    continue
+                if cookiesfrombrowser in dedupe:
+                    continue
+                dedupe.add(cookiesfrombrowser)
+                resolved.append(
+                    {
+                        "id": source.get("id"),
+                        "browser": source.get("browser"),
+                        "browserLabel": source.get("browserLabel"),
+                        "profile": source.get("profile"),
+                        "profileLabel": source.get("profileLabel"),
+                        "cookiesfrombrowser": cookiesfrombrowser,
+                    }
+                )
+
+            if selection_mode == "manual":
+                if resolved:
+                    return resolved[:1], None
+                return (
+                    [],
+                    "Selected browser cookie source is unavailable"
+                    + (f" ({'; '.join(source_errors[:2])})" if source_errors else ""),
+                )
+
+            return resolved[:MAX_COOKIE_SOURCE_ATTEMPTS], None
+
+        browser_cookies_enabled = self._is_truthy_env("YT_DLP_ENABLE_BROWSER_COOKIES", default=False)
+        if not browser_cookies_enabled:
+            return [], None
+
+        for cookies_browser in self._browser_cookie_candidates():
+            candidate = self._cookiesfrombrowser_option(cookies_browser)
+            if candidate:
+                return (
+                    [
+                        {
+                            "id": f"legacy_{cookies_browser}",
+                            "browser": cookies_browser,
+                            "browserLabel": self._browser_label(cookies_browser),
+                            "profile": None,
+                            "profileLabel": None,
+                            "cookiesfrombrowser": candidate,
+                        }
+                    ],
+                    None,
+                )
+        return [], None
 
     @staticmethod
     def _truncate_error_message(message: str, limit: int = 220) -> str:
@@ -530,7 +1065,7 @@ class YouTubeDownloader:
         base_opts: dict,
         *,
         extra_opts: dict | None = None,
-        cookiesfrombrowser: tuple[str, ...] | None = None,
+        cookiesfrombrowser: tuple[object, ...] | None = None,
         fetch_pot_runtime: dict | None = None,
         extractor_args: dict | None = None,
     ) -> dict:
@@ -837,37 +1372,41 @@ class YouTubeDownloader:
 
     def extract_video_info(self, url: str) -> VideoInfo | None:
         """Extract video information without downloading.
-        Uses --cookies-from-browser for first detected browser only."""
+        Tries cookie/browser sources based on explicit selection (if provided)."""
         self._last_extract_url = None
         self._last_extract_info = None
         self._last_extract_ydl_opts = None
+        self._last_extract_error = None
         base_opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": True,
         }
-        browser_cookies_enabled = self._is_truthy_env("YT_DLP_ENABLE_BROWSER_COOKIES", default=False)
-        cookie_browsers = self._browser_cookie_candidates() if browser_cookies_enabled else []
+        cookie_sources, cookie_source_error = self._resolve_cookie_attempt_sources()
+        browser_cookies_enabled = bool(cookie_sources) or self._is_truthy_env(
+            "YT_DLP_ENABLE_BROWSER_COOKIES",
+            default=False,
+        )
         fetch_pot_runtime = self._resolve_fetch_pot_runtime()
 
-        cookiesfrombrowser: tuple[str, ...] | None = None
-        cookie_browser_name: str | None = None
-        for cookies_browser in cookie_browsers:
-            candidate = self._cookiesfrombrowser_option(cookies_browser)
-            if candidate:
-                cookiesfrombrowser = candidate
-                cookie_browser_name = cookies_browser
-                break
+        if cookie_source_error and self._cookie_selection_mode_from_env() == "manual":
+            self._last_extract_error = cookie_source_error
+            print(f"Error extracting video info: {cookie_source_error}", file=sys.stderr)
+            return None
 
         attempts: list[tuple[str, dict]] = []
         attempts.append(("default", self._compose_ydl_opts(base_opts)))
-        if cookiesfrombrowser and cookie_browser_name:
-            attempts.append(
-                (
-                    f"cookie_{cookie_browser_name}",
-                    self._compose_ydl_opts(base_opts, cookiesfrombrowser=cookiesfrombrowser),
+        for source in cookie_sources:
+            cookiesfrombrowser = source.get("cookiesfrombrowser")
+            browser_name = str(source.get("browser") or "browser")
+            source_id = str(source.get("id") or browser_name)
+            if isinstance(cookiesfrombrowser, tuple):
+                attempts.append(
+                    (
+                        f"cookie_{source_id}",
+                        self._compose_ydl_opts(base_opts, cookiesfrombrowser=cookiesfrombrowser),
+                    )
                 )
-            )
         if fetch_pot_runtime:
             attempts.append(
                 (
@@ -875,17 +1414,22 @@ class YouTubeDownloader:
                     self._compose_ydl_opts(base_opts, fetch_pot_runtime=fetch_pot_runtime),
                 )
             )
-        if fetch_pot_runtime and cookiesfrombrowser and cookie_browser_name:
-            attempts.append(
-                (
-                    f"cookie_{cookie_browser_name}_fetch_pot",
-                    self._compose_ydl_opts(
-                        base_opts,
-                        cookiesfrombrowser=cookiesfrombrowser,
-                        fetch_pot_runtime=fetch_pot_runtime,
-                    ),
-                )
-            )
+        if fetch_pot_runtime:
+            for source in cookie_sources:
+                cookiesfrombrowser = source.get("cookiesfrombrowser")
+                browser_name = str(source.get("browser") or "browser")
+                source_id = str(source.get("id") or browser_name)
+                if isinstance(cookiesfrombrowser, tuple):
+                    attempts.append(
+                        (
+                            f"cookie_{source_id}_fetch_pot",
+                            self._compose_ydl_opts(
+                                base_opts,
+                                cookiesfrombrowser=cookiesfrombrowser,
+                                fetch_pot_runtime=fetch_pot_runtime,
+                            ),
+                        )
+                    )
         attempts.append(
             (
                 "mweb",
@@ -910,7 +1454,10 @@ class YouTubeDownloader:
             {
                 "event": "extract_attempt_plan",
                 "browser_cookies_enabled": browser_cookies_enabled,
-                "cookie_browser": cookie_browser_name,
+                "cookie_source_count": len(cookie_sources),
+                "cookie_sources": [source.get("id") for source in cookie_sources],
+                "cookie_selection_mode": self._cookie_selection_mode_from_env(),
+                "cookie_source_error": cookie_source_error,
                 "fetch_pot_enabled": self._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True),
                 "fetch_pot_runtime_available": bool(fetch_pot_runtime),
                 "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
@@ -984,6 +1531,7 @@ class YouTubeDownloader:
             preview = "; ".join(attempt_errors[:4])
             if len(attempt_errors) > 4:
                 preview = f"{preview}; ... (+{len(attempt_errors) - 4} more)"
+            self._last_extract_error = preview
             self._emit_debug_event(
                 "auth_debug",
                 {
@@ -1757,8 +2305,12 @@ class YouTubeDownloader:
             ydl_opts=self._last_extract_ydl_opts if self._last_extract_url == url else None,
         )
         allow_low_quality = self._is_truthy_env("YT_DLP_ALLOW_LOW_QUALITY_FALLBACK", default=False)
-        browser_cookies_enabled = self._is_truthy_env("YT_DLP_ENABLE_BROWSER_COOKIES", default=False)
-        cookie_browsers = self._browser_cookie_candidates() if browser_cookies_enabled else []
+        cookie_selection_mode = self._cookie_selection_mode_from_env()
+        cookie_sources, cookie_source_error = self._resolve_cookie_attempt_sources()
+        browser_cookies_enabled = bool(cookie_sources) or self._is_truthy_env(
+            "YT_DLP_ENABLE_BROWSER_COOKIES",
+            default=False,
+        )
         fetch_pot_enabled = self._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True)
         fetch_pot_runtime = self._resolve_fetch_pot_runtime()
         ffmpeg_location_for_ytdlp = self._resolve_ffmpeg_location_for_ytdlp()
@@ -1770,7 +2322,10 @@ class YouTubeDownloader:
                 "max_progressive_height": format_caps.get("max_progressive_height"),
                 "allow_low_quality_fallback": allow_low_quality,
                 "browser_cookies_enabled": browser_cookies_enabled,
-                "cookie_browsers": cookie_browsers,
+                "cookie_selection_mode": cookie_selection_mode,
+                "cookie_source_count": len(cookie_sources),
+                "cookie_sources": [source.get("id") for source in cookie_sources],
+                "cookie_source_error": cookie_source_error,
                 "fetch_pot_enabled": fetch_pot_enabled,
                 "fetch_pot_runtime_available": bool(fetch_pot_runtime),
                 "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
@@ -1836,15 +2391,14 @@ class YouTubeDownloader:
             # The video_id is already validated from YouTube, so it should be safe
             download_output_path = str(temp_dir / f"{cache_video_id}.%(ext)s")
 
-            selected_cookie_browser: str | None = None
-            selected_cookiesfrombrowser: tuple[str, ...] | None = None
-            if browser_cookies_enabled:
-                for cookies_browser in cookie_browsers:
-                    cookiesfrombrowser = self._cookiesfrombrowser_option(cookies_browser)
-                    if cookiesfrombrowser:
-                        selected_cookie_browser = cookies_browser
-                        selected_cookiesfrombrowser = cookiesfrombrowser
-                        break
+            if cookie_source_error and cookie_selection_mode == "manual":
+                return DownloadResult(
+                    success=False,
+                    file_path=None,
+                    file_size=None,
+                    error_message=cookie_source_error,
+                    video_info=video_info,
+                )
 
             # Try highest quality first, then auth/fetch_pot variants, then fallbacks.
             attempt_profiles = [
@@ -1856,14 +2410,19 @@ class YouTubeDownloader:
                     "extractor_args": None,
                 },
             ]
-            if selected_cookie_browser and selected_cookiesfrombrowser:
+            for cookie_source in cookie_sources:
+                source_id = str(cookie_source.get("id") or cookie_source.get("browser") or "source")
+                cookiesfrombrowser = cookie_source.get("cookiesfrombrowser")
+                if not isinstance(cookiesfrombrowser, tuple):
+                    continue
                 attempt_profiles.append(
                     {
-                        "name": "hq_best_cookie",
+                        "name": f"hq_best_cookie_{source_id}",
                         "selectors": self._build_format_selectors(quality),
-                        "cookiesfrombrowser": selected_cookiesfrombrowser,
+                        "cookiesfrombrowser": cookiesfrombrowser,
                         "fetch_pot": False,
                         "extractor_args": None,
+                        "cookie_source_id": source_id,
                     }
                 )
             if fetch_pot_enabled and fetch_pot_runtime:
@@ -1876,16 +2435,22 @@ class YouTubeDownloader:
                         "extractor_args": None,
                     }
                 )
-            if fetch_pot_enabled and fetch_pot_runtime and selected_cookie_browser and selected_cookiesfrombrowser:
-                attempt_profiles.append(
-                    {
-                        "name": "hq_best_cookie_fetch_pot",
-                        "selectors": self._build_format_selectors(quality),
-                        "cookiesfrombrowser": selected_cookiesfrombrowser,
-                        "fetch_pot": True,
-                        "extractor_args": None,
-                    }
-                )
+            if fetch_pot_enabled and fetch_pot_runtime:
+                for cookie_source in cookie_sources:
+                    source_id = str(cookie_source.get("id") or cookie_source.get("browser") or "source")
+                    cookiesfrombrowser = cookie_source.get("cookiesfrombrowser")
+                    if not isinstance(cookiesfrombrowser, tuple):
+                        continue
+                    attempt_profiles.append(
+                        {
+                            "name": f"hq_best_cookie_{source_id}_fetch_pot",
+                            "selectors": self._build_format_selectors(quality),
+                            "cookiesfrombrowser": cookiesfrombrowser,
+                            "fetch_pot": True,
+                            "extractor_args": None,
+                            "cookie_source_id": source_id,
+                        }
+                    )
 
             # Some videos block default web client HQ streams but still allow adaptive
             # formats via mweb client without dropping to low progressive quality.
@@ -2053,11 +2618,20 @@ class YouTubeDownloader:
             # Check if download succeeded
             if last_error and not original_file_path:
                 # All format selectors failed
+                manual_cookie_errors = [
+                    f"{name}: {message}"
+                    for name, message in profile_errors.items()
+                    if name.startswith("hq_best_cookie")
+                ]
+                if cookie_selection_mode == "manual" and manual_cookie_errors:
+                    error_message = "Selected cookie source failed: " + "; ".join(manual_cookie_errors[:2])
+                else:
+                    error_message = f"All format selectors failed. Last error: {last_error}"
                 return DownloadResult(
                     success=False,
                     file_path=None,
                     file_size=None,
-                    error_message=f"All format selectors failed. Last error: {last_error}",
+                    error_message=error_message,
                     video_info=video_info,
                 )
 
@@ -2135,6 +2709,9 @@ class YouTubeDownloader:
                     original_file_path.unlink()
             except OSError:
                 pass
+            cookie_attempt_errors = "; ".join(
+                f"{name}: {message}" for name, message in profile_errors.items() if name.startswith("hq_best_cookie")
+            )
             return DownloadResult(
                 success=False,
                 file_path=None,
@@ -2144,18 +2721,14 @@ class YouTubeDownloader:
                     f"but YouTube blocked adaptive download and only {selected_height}p progressive succeeded. "
                     + (
                         (
-                            "Browser cookies were enabled but did not unlock adaptive formats"
+                            (
+                                "Selected cookie source did not unlock adaptive formats"
+                                if cookie_selection_mode == "manual"
+                                else "Browser cookies were enabled but did not unlock adaptive formats"
+                            )
                             + (
-                                (
-                                    " (cookie attempt errors: "
-                                    + "; ".join(
-                                        f"{name}: {message}"
-                                        for name, message in profile_errors.items()
-                                        if name.startswith("hq_best_cookie")
-                                    )
-                                    + "). "
-                                )
-                                if any(name.startswith("hq_best_cookie") for name in profile_errors)
+                                (" (cookie attempt errors: " + cookie_attempt_errors + "). ")
+                                if cookie_attempt_errors
                                 else ". "
                             )
                             + "Try using a browser where you're signed in (cookies used automatically), "
@@ -2388,10 +2961,24 @@ def main():
     if len(sys.argv) < 2:
         print(
             "Usage: python downloader.py <youtube_url> [download_from_start] [quality] "
-            "[start_time] [end_time] [output_path] OR python downloader.py --validate <youtube_url>",
+            "[start_time] [end_time] [output_path] OR python downloader.py --validate <youtube_url> "
+            "OR python downloader.py --list-cookie-sources",
             file=sys.stderr,
         )
         sys.exit(1)
+
+    if sys.argv[1] == "--list-cookie-sources":
+        try:
+            sources = YouTubeDownloader.list_cookie_sources()
+            sys.stdout.write(json.dumps({"success": True, "sources": sources}))
+            sys.stdout.flush()
+            sys.exit(0)
+        except Exception as error:
+            message = YouTubeDownloader._truncate_error_message(str(error), limit=180)
+            sys.stdout.write(json.dumps({"success": False, "error": message, "sources": []}))
+            sys.stdout.flush()
+            print(f"Failed to list cookie sources: {message}", file=sys.stderr)
+            sys.exit(1)
 
     # Check if this is a validation request
     if sys.argv[1] == "--validate":
@@ -2404,8 +2991,15 @@ def main():
         # Extract video info only (no download)
         video_info = downloader.extract_video_info(url)
         if not video_info:
-            sys.stdout.write(json.dumps({"success": False, "error": "Failed to extract video information"}))
+            extract_error_raw = getattr(downloader, "_last_extract_error", None)
+            extract_error = (
+                str(extract_error_raw).strip()
+                if isinstance(extract_error_raw, str) and extract_error_raw.strip()
+                else "Failed to extract video information"
+            )
+            sys.stdout.write(json.dumps({"success": False, "error": extract_error}))
             sys.stdout.flush()
+            print(extract_error, file=sys.stderr)
             sys.exit(1)
 
         # Return video info as JSON

@@ -38,6 +38,30 @@ export interface YouTubeAuthStatus {
 	fetchPotEnabled: boolean;
 }
 
+export interface CookieSource {
+	id: string;
+	browser: string;
+	browserLabel: string;
+	profile: string | null;
+	profileLabel: string | null;
+	container: string | null;
+	keyring: string | null;
+	available: boolean;
+	hasYoutubeCookies: boolean;
+	hasYoutubeAuthCookies: boolean;
+	lastError: string | null;
+	priority: number;
+}
+
+export interface CookieSourceCatalog {
+	sources: CookieSource[];
+}
+
+export interface CookieSelection {
+	mode: "auto" | "manual";
+	sourceId?: string | null;
+}
+
 let unlistenDownloadProgress: UnlistenFn | null = null;
 let downloadProgressListenerSeq = 0;
 
@@ -50,9 +74,15 @@ function ensureTauriRuntime() {
 }
 
 export const tauriAPI = {
-	async extractVideoInfo(url: string): Promise<VideoInfo> {
+	async extractVideoInfo(options: {
+		url: string;
+		cookieSelection?: CookieSelection | null;
+	}): Promise<VideoInfo> {
 		ensureTauriRuntime();
-		return invoke<VideoInfo>("extract_video_info", { url });
+		return invoke<VideoInfo>("extract_video_info", {
+			url: options.url,
+			cookieSelection: options.cookieSelection ?? null,
+		});
 	},
 
 	async showSaveDialog(options: {
@@ -105,6 +135,7 @@ export const tauriAPI = {
 		startTime?: number | null;
 		endTime?: number | null;
 		sections?: Array<{ start: number | null; end: number | null }> | null;
+		cookieSelection?: CookieSelection | null;
 	}): Promise<{ success: boolean; filePath: string; fileSize: number }> {
 		ensureTauriRuntime();
 		return invoke("download_video", { options });
@@ -132,6 +163,15 @@ export const tauriAPI = {
 	async getYouTubeAuthStatus(): Promise<YouTubeAuthStatus> {
 		ensureTauriRuntime();
 		return invoke("get_youtube_auth_status");
+	},
+
+	async listYouTubeCookieSources(options?: {
+		forceRefresh?: boolean;
+	}): Promise<CookieSourceCatalog> {
+		ensureTauriRuntime();
+		return invoke("list_youtube_cookie_sources", {
+			forceRefresh: options?.forceRefresh ?? false,
+		});
 	},
 
 	onDownloadProgress(callback: (data: DownloadProgressData) => void): void {

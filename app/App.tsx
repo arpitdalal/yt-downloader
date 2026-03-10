@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+	COOKIE_OVERRIDE_USE_DEFAULT,
+	COOKIE_SELECTION_STORAGE_KEY,
+	cookieSelectionToOptionValue,
+	normalizeCookieSelection,
+	reconcileCookieSelectionOverride,
+	reconcileGlobalCookieSelection,
+	resolveOverrideToSelection,
+} from "./lib/cookie-selection.js";
+import {
+	type CookieSelection,
+	type CookieSource,
 	type DownloadProgressData,
 	tauriAPI,
 	type VideoInfo,
@@ -15,6 +26,18 @@ type DownloadStatus =
 
 type Section = { start: string; end: string };
 
+function loadStoredCookieSelection(): CookieSelection {
+	try {
+		const raw = localStorage.getItem(COOKIE_SELECTION_STORAGE_KEY);
+		if (!raw) {
+			return { mode: "auto" };
+		}
+		return normalizeCookieSelection(JSON.parse(raw));
+	} catch {
+		return { mode: "auto" };
+	}
+}
+
 export default function App() {
 	const [url, setUrl] = useState("");
 	const [localFile, setLocalFile] = useState<string | null>(null);
@@ -29,6 +52,19 @@ export default function App() {
 	const [youtubeAuth, setYoutubeAuth] = useState<YouTubeAuthStatus | null>(
 		null,
 	);
+	const [cookieSources, setCookieSources] = useState<CookieSource[]>([]);
+	const [cookieSourcesLoading, setCookieSourcesLoading] = useState(false);
+	const [cookieSourcesInitialized, setCookieSourcesInitialized] =
+		useState(false);
+	const [cookieSourcesError, setCookieSourcesError] = useState<string | null>(
+		null,
+	);
+	const [globalCookieSelection, setGlobalCookieSelection] =
+		useState<CookieSelection>(loadStoredCookieSelection);
+	const [cookieSelectionOverride, setCookieSelectionOverride] = useState(
+		COOKIE_OVERRIDE_USE_DEFAULT,
+	);
+	const cookieSourcesRequestIdRef = useRef(0);
 
 	const setStatusSynced = useCallback((next: DownloadStatus) => {
 		statusRef.current = next;
@@ -94,9 +130,74 @@ export default function App() {
 		}
 	}, []);
 
+	const refreshCookieSources = useCallback(async (forceRefresh = false) => {
+		const requestId = ++cookieSourcesRequestIdRef.current;
+		setCookieSourcesLoading(true);
+		setCookieSourcesError(null);
+		try {
+			const catalog = await tauriAPI.listYouTubeCookieSources({ forceRefresh });
+			if (requestId !== cookieSourcesRequestIdRef.current) {
+				return;
+			}
+			setCookieSources(catalog.sources || []);
+		} catch (err) {
+			console.error("Failed to list cookie sources:", err);
+			if (requestId !== cookieSourcesRequestIdRef.current) {
+				return;
+			}
+			setCookieSources([]);
+			setCookieSourcesError(
+				err instanceof Error
+					? err.message
+					: "Failed to discover browser cookie sources.",
+			);
+		} finally {
+			if (requestId === cookieSourcesRequestIdRef.current) {
+				setCookieSourcesInitialized(true);
+				setCookieSourcesLoading(false);
+			}
+		}
+	}, []);
+
 	useEffect(() => {
 		void refreshYouTubeAuthStatus();
-	}, [refreshYouTubeAuthStatus]);
+		void refreshCookieSources(false);
+	}, [refreshYouTubeAuthStatus, refreshCookieSources]);
+
+	useEffect(() => {
+		try {
+			const serializedSelection = JSON.stringify(globalCookieSelection);
+			if (
+				localStorage.getItem(COOKIE_SELECTION_STORAGE_KEY) !==
+				serializedSelection
+			) {
+				localStorage.setItem(COOKIE_SELECTION_STORAGE_KEY, serializedSelection);
+			}
+		} catch {
+			// Ignore storage failures and continue with in-memory state.
+		}
+	}, [globalCookieSelection]);
+
+	useEffect(() => {
+		if (
+			!cookieSourcesInitialized ||
+			cookieSourcesLoading ||
+			cookieSourcesError
+		) {
+			return;
+		}
+		setGlobalCookieSelection((previous) =>
+			reconcileGlobalCookieSelection(previous, cookieSources),
+		);
+		setCookieSelectionOverride((previous) =>
+			reconcileCookieSelectionOverride(previous, cookieSources),
+		);
+	}, [
+		cookieSources,
+		cookieSourcesError,
+		cookieSourcesInitialized,
+		cookieSourcesLoading,
+	]);
 
 	const isYouTubeAuthError = (message: string): boolean => {
 		return (
@@ -223,6 +324,36 @@ export default function App() {
 		setSections(newSections);
 	};
 
+	const describeCookieSourceState = (source: CookieSource): string => {
+		if (!source.available) {
+			return "Unavailable";
+		}
+		if (source.hasYoutubeAuthCookies) {
+			return "Signed in likely";
+		}
+		if (source.hasYoutubeCookies) {
+			return "Cookies found";
+		}
+		return "No YouTube cookies found";
+	};
+
+	const buildCookieSourceLabel = (source: CookieSource): string => {
+		const profile = source.profileLabel || "Default";
+		const state = describeCookieSourceState(source);
+		if (!source.available && source.lastError) {
+			return `${source.browserLabel} - ${profile} (${state}: ${source.lastError})`;
+		}
+		return `${source.browserLabel} - ${profile} (${state})`;
+	};
+
+	const resolveSubmitCookieSelection = (): CookieSelection =>
+		cookieSourcesError
+			? { mode: "auto" }
+			: resolveOverrideToSelection(
+					cookieSelectionOverride,
+					globalCookieSelection,
+				);
+
 	const validateSections = (): string | null => {
 		// At least one section required
 		if (sections.length === 0) {
@@ -304,6 +435,7 @@ export default function App() {
 				setLocalFile(result.filePaths[0]);
 				setUrl(""); // Clear URL if file selected
 				setError(null);
+				setCookieSelectionOverride(COOKIE_OVERRIDE_USE_DEFAULT);
 			}
 		} catch (err) {
 			console.error("Failed to choose file:", err);
@@ -315,11 +447,15 @@ export default function App() {
 
 	const handleClearLocalFile = () => {
 		setLocalFile(null);
+		setCookieSelectionOverride(COOKIE_OVERRIDE_USE_DEFAULT);
 	};
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 		if (!url.trim() && !localFile) return;
+		if (!localFile && !isInitialCookieSourceScanComplete) {
+			return;
+		}
 
 		// Validate sections
 		const validationError = validateSections();
@@ -334,6 +470,9 @@ export default function App() {
 		setSuccessMessage(null);
 		setProgressSynced(0);
 		setVideoInfo(null);
+		const submitCookieSelection = localFile
+			? null
+			: resolveSubmitCookieSelection();
 
 		try {
 			if (localFile) {
@@ -381,7 +520,10 @@ export default function App() {
 			} else {
 				// Handle YouTube download
 				setStatusSynced("extracting");
-				const info = await tauriAPI.extractVideoInfo(url.trim());
+				const info = await tauriAPI.extractVideoInfo({
+					url: url.trim(),
+					cookieSelection: submitCookieSelection,
+				});
 
 				if (!info) {
 					throw new Error("Failed to extract video information");
@@ -423,6 +565,7 @@ export default function App() {
 					url: url.trim(),
 					savePath,
 					sections: sectionsArray,
+					cookieSelection: submitCookieSelection,
 				});
 
 				setStatusSynced("completed");
@@ -454,6 +597,8 @@ export default function App() {
 			}
 			setStatusSynced("error");
 			setError(getErrorMessage(err));
+		} finally {
+			setCookieSelectionOverride(COOKIE_OVERRIDE_USE_DEFAULT);
 		}
 	};
 
@@ -468,22 +613,45 @@ export default function App() {
 			setSections([{ start: "", end: "" }]);
 			setVideoInfo(null);
 			setSuccessMessage(null);
+			setCookieSelectionOverride(COOKIE_OVERRIDE_USE_DEFAULT);
 		} catch (err) {
 			console.error("Failed to cancel download:", err);
 		}
 	};
 
-	const buildYoutubeBrowserStatus = (): string => {
-		if (!youtubeAuth) {
-			return "Checking browser/runtime status...";
+	const buildCookieSourceStatus = (): string => {
+		if (cookieSourcesLoading) {
+			return "Scanning browser cookie sources...";
 		}
-		if (youtubeAuth.detectedBrowser) {
-			if (youtubeAuth.connected) {
-				return `Browser detected: ${youtubeAuth.detectedBrowser} (cookies available; cookie-based auth may be attempted during download).`;
-			}
-			return `Browser detected: ${youtubeAuth.detectedBrowser} (cookie-based auth is not currently enabled or may be unavailable).`;
+		if (cookieSourcesError) {
+			return `Cookie source scan failed: ${cookieSourcesError}`;
 		}
-		return "No supported browser with cookies detected. Install Chrome/Firefox and sign in to YouTube for best results.";
+		if (cookieSources.length === 0) {
+			return "No browser cookie sources detected.";
+		}
+		const authReadyCount = cookieSources.filter(
+			(source) => source.available && source.hasYoutubeAuthCookies,
+		).length;
+		return `${cookieSources.length} source(s) detected, ${authReadyCount} with likely signed-in YouTube cookies.`;
+	};
+
+	const buildGlobalSelectionStatus = (): string => {
+		if (
+			globalCookieSelection.mode !== "manual" ||
+			!globalCookieSelection.sourceId
+		) {
+			return "Global default: Auto (recommended)";
+		}
+		const source = cookieSources.find(
+			(candidate) => candidate.id === globalCookieSelection.sourceId,
+		);
+		if (!source) {
+			return `Global default: Selected source (${globalCookieSelection.sourceId}) not currently detected.`;
+		}
+		if (!source.available) {
+			return `Global default: Selected source (${buildCookieSourceLabel(source)}) not currently available.`;
+		}
+		return `Global default: ${source.browserLabel} - ${source.profileLabel || "Default"}`;
 	};
 
 	const buildFetchPotStatus = (): string => {
@@ -498,6 +666,20 @@ export default function App() {
 		}
 		return "JS runtime not detected (fetch_pot disabled for this run).";
 	};
+
+	const selectedGlobalManualSourceMissing =
+		globalCookieSelection.mode === "manual" &&
+		!!globalCookieSelection.sourceId &&
+		!cookieSources.some(
+			(source) => source.id === globalCookieSelection.sourceId,
+		);
+	const selectedOverrideManualSourceMissing =
+		cookieSelectionOverride.startsWith("manual:") &&
+		!cookieSources.some(
+			(source) => cookieSelectionOverride === `manual:${source.id}`,
+		);
+	const isInitialCookieSourceScanComplete =
+		cookieSourcesInitialized && !cookieSourcesLoading;
 
 	return (
 		<div className="min-h-screen bg-gray-50 py-4 sm:py-8">
@@ -518,8 +700,66 @@ export default function App() {
 						YouTube
 					</h2>
 					<p className="text-sm text-gray-600">
-						{buildYoutubeBrowserStatus()} {buildFetchPotStatus()}
+						{buildCookieSourceStatus()} {buildGlobalSelectionStatus()}{" "}
+						{buildFetchPotStatus()}
 					</p>
+					<div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+						<div>
+							<label
+								htmlFor="globalCookieSelection"
+								className="block text-xs font-medium text-gray-700 mb-1"
+							>
+								Default cookie source
+							</label>
+							<select
+								id="globalCookieSelection"
+								value={cookieSelectionToOptionValue(globalCookieSelection)}
+								onChange={(event) => {
+									const value = event.target.value;
+									if (value === "auto") {
+										setGlobalCookieSelection({ mode: "auto" });
+										return;
+									}
+									if (value.startsWith("manual:")) {
+										const sourceId = value.slice("manual:".length);
+										setGlobalCookieSelection({ mode: "manual", sourceId });
+									}
+								}}
+								className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+							>
+								<option value="auto">Auto (recommended)</option>
+								{selectedGlobalManualSourceMissing && (
+									<option
+										value={cookieSelectionToOptionValue(globalCookieSelection)}
+										disabled
+									>
+										Previously selected source (not detected)
+									</option>
+								)}
+								{cookieSources.map((source) => (
+									<option
+										key={source.id}
+										value={`manual:${source.id}`}
+										disabled={!source.available}
+									>
+										{buildCookieSourceLabel(source)}
+									</option>
+								))}
+							</select>
+						</div>
+						<div>
+							<button
+								type="button"
+								onClick={() => {
+									void refreshCookieSources(true);
+								}}
+								disabled={cookieSourcesLoading || status === "downloading"}
+								className="px-3 py-2 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+							>
+								{cookieSourcesLoading ? "Refreshing..." : "Refresh Sources"}
+							</button>
+						</div>
+					</div>
 				</div>
 
 				{/* Download Form */}
@@ -552,6 +792,48 @@ export default function App() {
 								}
 							/>
 						</div>
+
+						{!localFile && (
+							<div>
+								<label
+									htmlFor="cookieSelectionOverride"
+									className="block text-sm font-medium text-gray-700 mb-2"
+								>
+									Cookie source for this download
+								</label>
+								<select
+									id="cookieSelectionOverride"
+									value={cookieSelectionOverride}
+									onChange={(event) =>
+										setCookieSelectionOverride(event.target.value)
+									}
+									disabled={status === "extracting" || status === "downloading"}
+									className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+								>
+									<option value={COOKIE_OVERRIDE_USE_DEFAULT}>
+										Use app default
+									</option>
+									<option value="auto">Auto (one-off)</option>
+									{selectedOverrideManualSourceMissing && (
+										<option value={cookieSelectionOverride} disabled>
+											Previously selected source (not detected)
+										</option>
+									)}
+									{cookieSources.map((source) => (
+										<option
+											key={source.id}
+											value={`manual:${source.id}`}
+											disabled={!source.available}
+										>
+											{buildCookieSourceLabel(source)}
+										</option>
+									))}
+								</select>
+								<p className="mt-1 text-xs text-gray-500">
+									One-off override resets after submit or cancel.
+								</p>
+							</div>
+						)}
 
 						<div className="flex items-center gap-4 my-4">
 							<div className="flex-1 border-t border-gray-300" />
@@ -697,6 +979,7 @@ export default function App() {
 								disabled={
 									status === "extracting" ||
 									status === "downloading" ||
+									(!localFile && !isInitialCookieSourceScanComplete) ||
 									(!url.trim() && !localFile)
 								}
 								className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
