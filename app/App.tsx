@@ -165,10 +165,17 @@ export default function App() {
 	}, [refreshYouTubeAuthStatus, refreshCookieSources]);
 
 	useEffect(() => {
-		localStorage.setItem(
-			COOKIE_SELECTION_STORAGE_KEY,
-			JSON.stringify(globalCookieSelection),
-		);
+		try {
+			const serializedSelection = JSON.stringify(globalCookieSelection);
+			if (
+				localStorage.getItem(COOKIE_SELECTION_STORAGE_KEY) !==
+				serializedSelection
+			) {
+				localStorage.setItem(COOKIE_SELECTION_STORAGE_KEY, serializedSelection);
+			}
+		} catch {
+			// Ignore storage failures and continue with in-memory state.
+		}
 	}, [globalCookieSelection]);
 
 	useEffect(() => {
