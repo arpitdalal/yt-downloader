@@ -526,12 +526,19 @@ fn fetch_cookie_source_catalog_from_python(app: &AppHandle) -> Result<CookieSour
     )?;
     let output = run_untracked_process(child)?;
     if !output.status.success() {
+        let structured_error = parse_json_payload(&output.stdout)
+            .ok()
+            .and_then(|value| serde_json::from_value::<PythonCookieSourcesResponse>(value).ok())
+            .filter(|response| !response.success)
+            .and_then(|response| response.error);
         let stderr = output.stderr.trim();
-        let message = if stderr.is_empty() {
-            format!("Process exited with code {}", output.status)
-        } else {
-            stderr.to_string()
-        };
+        let message = structured_error.unwrap_or_else(|| {
+            if stderr.is_empty() {
+                format!("Process exited with code {}", output.status)
+            } else {
+                stderr.to_string()
+            }
+        });
         return Err(format!("Failed to list cookie sources: {message}"));
     }
 
