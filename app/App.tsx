@@ -340,7 +340,12 @@ export default function App() {
 	};
 
 	const resolveSubmitCookieSelection = (): CookieSelection =>
-		resolveOverrideToSelection(cookieSelectionOverride, globalCookieSelection);
+		cookieSourcesError
+			? { mode: "auto" }
+			: resolveOverrideToSelection(
+					cookieSelectionOverride,
+					globalCookieSelection,
+				);
 
 	const validateSections = (): string | null => {
 		// At least one section required
