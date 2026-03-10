@@ -364,7 +364,7 @@ fn run_extract_video_info(
         None,
         cookie_selection.as_ref(),
         selected_cookie_sources.as_deref(),
-    );
+    )?;
     info!("Extract video info started: url={}", validated_url);
     let child = spawn_python_process(
         "Failed to start download process",
@@ -442,7 +442,7 @@ fn run_download_video(
         &ffmpeg_path,
         options.cookie_selection.as_ref(),
         selected_cookie_sources.as_deref(),
-    );
+    )?;
     info!(
         "Download started: url={} save_path={} sections={}",
         validated_url,
@@ -565,11 +565,7 @@ fn resolve_cookie_sources_for_selection(
         return Ok(None);
     };
 
-    let mode = if selection.mode.eq_ignore_ascii_case("manual") {
-        "manual"
-    } else {
-        "auto"
-    };
+    let mode = parse_cookie_selection_mode(&selection.mode)?;
     let mut sources = match load_cookie_source_catalog(app, state, false) {
         Ok(catalog) => catalog.sources,
         Err(error) => {
@@ -579,7 +575,7 @@ fn resolve_cookie_sources_for_selection(
             warn!(
                 "Cookie source auto selection failed, continuing without explicit sources: {error}"
             );
-            return Ok(Some(vec![]));
+            return Ok(None);
         }
     };
     sources.sort_by_key(|source| source.priority);
@@ -613,6 +609,16 @@ fn resolve_cookie_sources_for_selection(
     Ok(Some(auto_sources))
 }
 
+fn parse_cookie_selection_mode(mode: &str) -> Result<&'static str, String> {
+    if mode.eq_ignore_ascii_case("manual") {
+        return Ok("manual");
+    }
+    if mode.eq_ignore_ascii_case("auto") {
+        return Ok("auto");
+    }
+    Err(format!("Unsupported cookie selection mode: {mode}"))
+}
+
 fn default_cookie_browser_list() -> &'static str {
     if cfg!(target_os = "macos") {
         "arc,chrome,safari,firefox,edge,brave,chromium,opera,vivaldi"
@@ -628,24 +634,23 @@ fn yt_dlp_env_overrides(
     ffmpeg_path: Option<&Path>,
     cookie_selection: Option<&CookieSelection>,
     selected_cookie_sources: Option<&[CookieSource]>,
-) -> Vec<(&'static str, String)> {
+) -> Result<Vec<(&'static str, String)>, String> {
     let mut env_overrides = Vec::new();
     if let Some(path) = ffmpeg_path {
         env_overrides.push(("FFMPEG_PATH", path.to_string_lossy().to_string()));
     }
 
     if let Some(selection) = cookie_selection {
-        let mode = if selection.mode.eq_ignore_ascii_case("manual") {
-            "manual"
-        } else {
-            "auto"
-        };
-        let explicit_sources = selected_cookie_sources.unwrap_or(&[]);
-        let explicit_sources_json =
-            serde_json::to_string(explicit_sources).unwrap_or_else(|_| "[]".to_string());
+        let mode = parse_cookie_selection_mode(&selection.mode)?;
         env_overrides.push(("YT_DLP_ENABLE_BROWSER_COOKIES", "true".to_string()));
         env_overrides.push(("YT_DLP_COOKIE_SELECTION_MODE", mode.to_string()));
-        env_overrides.push(("YT_DLP_COOKIE_SOURCES_JSON", explicit_sources_json));
+        if let Some(explicit_sources) =
+            selected_cookie_sources.filter(|sources| !sources.is_empty())
+        {
+            let explicit_sources_json =
+                serde_json::to_string(explicit_sources).unwrap_or_else(|_| "[]".to_string());
+            env_overrides.push(("YT_DLP_COOKIE_SOURCES_JSON", explicit_sources_json));
+        }
     } else {
         let enable_browser_cookies =
             env::var("YT_DLP_ENABLE_BROWSER_COOKIES").unwrap_or_else(|_| "true".to_string());
@@ -673,7 +678,7 @@ fn yt_dlp_env_overrides(
         ));
         env_overrides.push(("YT_DLP_JS_RUNTIME_NAME", runtime_name));
     }
-    env_overrides
+    Ok(env_overrides)
 }
 
 fn download_env_overrides(
@@ -681,7 +686,7 @@ fn download_env_overrides(
     ffmpeg_path: &Path,
     cookie_selection: Option<&CookieSelection>,
     selected_cookie_sources: Option<&[CookieSource]>,
-) -> Vec<(&'static str, String)> {
+) -> Result<Vec<(&'static str, String)>, String> {
     yt_dlp_env_overrides(
         app,
         Some(ffmpeg_path),

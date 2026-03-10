@@ -659,17 +659,15 @@ export default function App() {
 		globalCookieSelection.mode === "manual" &&
 		!!globalCookieSelection.sourceId &&
 		!cookieSources.some(
-			(source) =>
-				source.id === globalCookieSelection.sourceId && source.available,
+			(source) => source.id === globalCookieSelection.sourceId,
 		);
 	const selectedOverrideManualSourceMissing =
 		cookieSelectionOverride.startsWith("manual:") &&
 		!cookieSources.some(
-			(source) =>
-				cookieSelectionOverride === `manual:${source.id}` && source.available,
+			(source) => cookieSelectionOverride === `manual:${source.id}`,
 		);
 	const isInitialCookieSourceScanComplete =
-		cookieSourcesInitialized && !cookieSourcesLoading && !cookieSourcesError;
+		cookieSourcesInitialized && !cookieSourcesLoading;
 
 	return (
 		<div className="min-h-screen bg-gray-50 py-4 sm:py-8">
@@ -721,8 +719,9 @@ export default function App() {
 								{selectedGlobalManualSourceMissing && (
 									<option
 										value={cookieSelectionToOptionValue(globalCookieSelection)}
+										disabled
 									>
-										Previously selected source (unavailable)
+										Previously selected source (not detected)
 									</option>
 								)}
 								{cookieSources.map((source) => (
@@ -804,8 +803,8 @@ export default function App() {
 									</option>
 									<option value="auto">Auto (one-off)</option>
 									{selectedOverrideManualSourceMissing && (
-										<option value={cookieSelectionOverride}>
-											Previously selected source (unavailable)
+										<option value={cookieSelectionOverride} disabled>
+											Previously selected source (not detected)
 										</option>
 									)}
 									{cookieSources.map((source) => (
