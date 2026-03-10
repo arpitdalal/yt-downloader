@@ -7,9 +7,12 @@ export function normalizeCookieSelection(value: unknown): CookieSelection {
 	if (!value || typeof value !== "object") {
 		return { mode: "auto" };
 	}
-	const parsed = value as { mode?: string; sourceId?: string | null };
-	if (parsed.mode === "manual" && parsed.sourceId) {
-		return { mode: "manual", sourceId: parsed.sourceId };
+	const parsed = value as Record<string, unknown>;
+	if (parsed.mode === "manual") {
+		const { sourceId } = parsed;
+		if (typeof sourceId === "string" && sourceId.trim().length > 0) {
+			return { mode: "manual", sourceId };
+		}
 	}
 	return { mode: "auto" };
 }
@@ -49,7 +52,9 @@ export function reconcileGlobalCookieSelection(
 	if (selection.mode !== "manual" || !selection.sourceId) {
 		return selection.mode === "manual" ? { mode: "auto" } : selection;
 	}
-	return sources.some((source) => source.id === selection.sourceId)
+	return sources.some(
+		(source) => source.id === selection.sourceId && source.available,
+	)
 		? selection
 		: { mode: "auto" };
 }
@@ -69,7 +74,7 @@ export function reconcileCookieSelectionOverride(
 	if (!sourceId) {
 		return COOKIE_OVERRIDE_USE_DEFAULT;
 	}
-	return sources.some((source) => source.id === sourceId)
+	return sources.some((source) => source.id === sourceId && source.available)
 		? overrideValue
 		: COOKIE_OVERRIDE_USE_DEFAULT;
 }

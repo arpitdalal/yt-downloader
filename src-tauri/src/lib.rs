@@ -598,12 +598,11 @@ fn resolve_cookie_sources_for_selection(
         return Ok(Some(vec![source]));
     }
 
-    let mut auto_sources: Vec<CookieSource> = sources
+    let auto_sources: Vec<CookieSource> = sources
         .into_iter()
         .filter(|source| source.available)
         .take(MAX_COOKIE_SOURCE_ATTEMPTS)
         .collect();
-    auto_sources.sort_by_key(|source| source.priority);
     Ok(Some(auto_sources))
 }
 

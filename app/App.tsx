@@ -64,6 +64,7 @@ export default function App() {
 	const [cookieSelectionOverride, setCookieSelectionOverride] = useState(
 		COOKIE_OVERRIDE_USE_DEFAULT,
 	);
+	const cookieSourcesRequestIdRef = useRef(0);
 
 	const setStatusSynced = useCallback((next: DownloadStatus) => {
 		statusRef.current = next;
@@ -130,13 +131,20 @@ export default function App() {
 	}, []);
 
 	const refreshCookieSources = useCallback(async (forceRefresh = false) => {
+		const requestId = ++cookieSourcesRequestIdRef.current;
 		setCookieSourcesLoading(true);
 		setCookieSourcesError(null);
 		try {
 			const catalog = await tauriAPI.listYouTubeCookieSources({ forceRefresh });
+			if (requestId !== cookieSourcesRequestIdRef.current) {
+				return;
+			}
 			setCookieSources(catalog.sources || []);
 		} catch (err) {
 			console.error("Failed to list cookie sources:", err);
+			if (requestId !== cookieSourcesRequestIdRef.current) {
+				return;
+			}
 			setCookieSources([]);
 			setCookieSourcesError(
 				err instanceof Error
@@ -144,8 +152,10 @@ export default function App() {
 					: "Failed to discover browser cookie sources.",
 			);
 		} finally {
-			setCookieSourcesInitialized(true);
-			setCookieSourcesLoading(false);
+			if (requestId === cookieSourcesRequestIdRef.current) {
+				setCookieSourcesInitialized(true);
+				setCookieSourcesLoading(false);
+			}
 		}
 	}, []);
 
@@ -329,8 +339,13 @@ export default function App() {
 		return `${source.browserLabel} - ${profile} (${state})`;
 	};
 
-	const resolveSubmitCookieSelection = (): CookieSelection =>
-		resolveOverrideToSelection(cookieSelectionOverride, globalCookieSelection);
+	const resolveSubmitCookieSelection = (): CookieSelection | null =>
+		isInitialCookieSourceScanComplete
+			? resolveOverrideToSelection(
+					cookieSelectionOverride,
+					globalCookieSelection,
+				)
+			: null;
 
 	const validateSections = (): string | null => {
 		// At least one section required
@@ -643,13 +658,17 @@ export default function App() {
 		globalCookieSelection.mode === "manual" &&
 		!!globalCookieSelection.sourceId &&
 		!cookieSources.some(
-			(source) => source.id === globalCookieSelection.sourceId,
+			(source) =>
+				source.id === globalCookieSelection.sourceId && source.available,
 		);
 	const selectedOverrideManualSourceMissing =
 		cookieSelectionOverride.startsWith("manual:") &&
 		!cookieSources.some(
-			(source) => cookieSelectionOverride === `manual:${source.id}`,
+			(source) =>
+				cookieSelectionOverride === `manual:${source.id}` && source.available,
 		);
+	const isInitialCookieSourceScanComplete =
+		cookieSourcesInitialized && !cookieSourcesLoading && !cookieSourcesError;
 
 	return (
 		<div className="min-h-screen bg-gray-50 py-4 sm:py-8">
@@ -706,7 +725,11 @@ export default function App() {
 									</option>
 								)}
 								{cookieSources.map((source) => (
-									<option key={source.id} value={`manual:${source.id}`}>
+									<option
+										key={source.id}
+										value={`manual:${source.id}`}
+										disabled={!source.available}
+									>
 										{buildCookieSourceLabel(source)}
 									</option>
 								))}
@@ -785,7 +808,11 @@ export default function App() {
 										</option>
 									)}
 									{cookieSources.map((source) => (
-										<option key={source.id} value={`manual:${source.id}`}>
+										<option
+											key={source.id}
+											value={`manual:${source.id}`}
+											disabled={!source.available}
+										>
 											{buildCookieSourceLabel(source)}
 										</option>
 									))}
