@@ -1,5 +1,13 @@
 const REPO = "arpitdalal/yt-downloader";
-const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
+
+function getApiUrl(): string {
+	const tag =
+		typeof process !== "undefined" ? process.env?.RELEASE_TAG?.trim() : "";
+	if (tag) {
+		return `https://api.github.com/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`;
+	}
+	return `https://api.github.com/repos/${REPO}/releases/latest`;
+}
 
 export interface Asset {
 	name: string;
@@ -91,7 +99,10 @@ function getAuthHeaders(): Record<string, string> {
 export async function getReleaseData(): Promise<ReleaseData> {
 	try {
 		const signal = AbortSignal.timeout(5000);
-		const res = await fetch(API_URL, { signal, headers: getAuthHeaders() });
+		const res = await fetch(getApiUrl(), {
+			signal,
+			headers: getAuthHeaders(),
+		});
 		if (!res.ok) {
 			console.error(
 				"[github] getReleaseData non-OK:",
