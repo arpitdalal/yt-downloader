@@ -67,7 +67,7 @@ The app bundles a **static** FFmpeg binary for Linux and macOS so it runs withou
    - `ffmpeg-N-123778-g3b55818764-win64-gpl.zip`
 4. Get its SHA256 from the asset digest or by downloading it and running:
    ```powershell
-   Get-FileHash -Path ffmpeg.zip -Algorithm SHA256
+   Get-FileHash -Path ffmpeg-N-123778-g3b55818764-win64-gpl.zip -Algorithm SHA256
    ```
 5. Edit the script and set:
    - `$ffmpegReleaseTag` = chosen immutable tag
