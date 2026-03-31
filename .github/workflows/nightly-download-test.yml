@@ -15,7 +15,7 @@ jobs:
       stale: ${{ steps.version-check.outputs.stale }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check yt-dlp version staleness
         id: version-check
