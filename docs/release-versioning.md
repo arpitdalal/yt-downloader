@@ -21,13 +21,15 @@ Guardrail:
 - `pnpm release:check-version` validates all version files match.
 - In tag builds, it also validates `RELEASE_TAG === v<version>`.
 - `tauri-release.yml` runs this before any platform build uploads artifacts.
+- `pnpm release:check-pushed-tags` reads refs from Git's `pre-push` hook and blocks local pushes of `v*` tags that do not match the checked-out release version.
+- `lefthook.yml` runs that local guard automatically on every push.
 
 Release steps:
 
 1. Bump all canonical version files.
 2. Run `pnpm release:check-version`.
 3. Commit and merge.
-4. Create a new tag matching the version, eg `v2.2.0`.
+4. Create a new tag matching the version, eg `v2.2.2`.
 5. Let release workflow build and upload assets.
 6. Let website deploy render that release.
 

@@ -21,6 +21,9 @@ pre-commit:
 
 pre-push:
   commands:
+    release-tag-version:
+      run: pnpm release:check-pushed-tags
+      use_stdin: true
     biome:
       run: pnpm lint:ts
     ruff:
