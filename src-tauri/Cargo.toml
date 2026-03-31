@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "2.2.0"
+version = "2.2.2"
 description = "YouTube Downloader"
 authors = ["Arpit Dalal <arpitdalalm@gmail.com>"]
 license = "MIT"
