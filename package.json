@@ -1,6 +1,6 @@
 {
 	"name": "yt-downloader",
-	"version": "2.0.0",
+	"version": "2.2.0",
 	"description": "YouTube Downloader Application",
 	"author": "Arpit Dalal <arpitdalalm@gmail.com>",
 	"private": true,
@@ -32,7 +32,8 @@
 		"format:ts": "biome check --write app/ vite.config.ts scripts/prebuild.js",
 		"format:python": "ruff format python/ && ruff check --fix python/",
 		"format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml",
-		"prepare": "lefthook install"
+		"prepare": "lefthook install",
+		"release:check-version": "node scripts/check-release-version.mjs"
 	},
 	"dependencies": {
 		"@tauri-apps/api": "^2.10.1",
