@@ -1,11 +1,23 @@
 import { readFileSync } from "node:fs";
 
 function readJson(path) {
-	return JSON.parse(readFileSync(path, "utf8"));
+	try {
+		return JSON.parse(readFileSync(path, "utf8"));
+	} catch (error) {
+		throw new Error(`failed to read ${path}: ${error.message}`, {
+			cause: error,
+		});
+	}
 }
 
 function readText(path) {
-	return readFileSync(path, "utf8");
+	try {
+		return readFileSync(path, "utf8");
+	} catch (error) {
+		throw new Error(`failed to read ${path}: ${error.message}`, {
+			cause: error,
+		});
+	}
 }
 
 function requireMatch(text, pattern, label) {

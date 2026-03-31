@@ -4,13 +4,12 @@ import {
 	assertReleaseVersionsAligned,
 } from "./release-version-lib.mjs";
 
-const version = assertReleaseVersionsAligned();
 const rl = readline.createInterface({
 	input: process.stdin,
 	crlfDelay: Infinity,
 });
 
-let checkedAnyReleaseTag = false;
+const releaseTags = [];
 
 for await (const line of rl) {
 	if (!line.trim()) continue;
@@ -18,11 +17,13 @@ for await (const line of rl) {
 	const [localRef] = line.split(/\s+/, 4);
 	if (!localRef?.startsWith("refs/tags/v")) continue;
 
-	const releaseTag = localRef.slice("refs/tags/".length);
-	assertReleaseTagMatchesVersion(releaseTag, version);
-	checkedAnyReleaseTag = true;
+	releaseTags.push(localRef.slice("refs/tags/".length));
 }
 
-if (checkedAnyReleaseTag) {
+if (releaseTags.length > 0) {
+	const version = assertReleaseVersionsAligned();
+	for (const releaseTag of releaseTags) {
+		assertReleaseTagMatchesVersion(releaseTag, version);
+	}
 	console.log(`Tag push version OK: v${version}`);
 }
