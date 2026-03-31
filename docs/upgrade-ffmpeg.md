@@ -4,7 +4,7 @@ The app bundles a **static** FFmpeg binary for Linux and macOS so it runs withou
 
 - **Linux**: script downloads from [yt-dlp/FFmpeg-Builds](https://github.com/yt-dlp/FFmpeg-Builds/releases).
 - **macOS**: script downloads from [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de/) (arm64 static builds).
-- **Windows**: script downloads from gyan.dev (see [scripts/bundle-dependencies-windows.ps1](../scripts/bundle-dependencies-windows.ps1)); same idea below.
+- **Windows**: script downloads from [yt-dlp/FFmpeg-Builds](https://github.com/yt-dlp/FFmpeg-Builds/releases) using a pinned release asset.
 
 ---
 
@@ -61,12 +61,19 @@ The app bundles a **static** FFmpeg binary for Linux and macOS so it runs withou
 
 **File:** `scripts/bundle-dependencies-windows.ps1`
 
-The script uses a fixed URL and `$expectedFfmpegZipHash`. To upgrade:
-
-1. Choose a new [gyan.dev FFmpeg essentials build](https://www.gyan.dev/ffmpeg/builds/) (or the same URL pattern).
-2. Download the zip and compute its SHA256 (e.g. `Get-FileHash -Path ffmpeg.zip -Algorithm SHA256` in PowerShell).
-3. Update `$ffmpegUrl` and `$expectedFfmpegZipHash` in the script.
-4. Run the script and then a Windows build to confirm.
+1. Go to [yt-dlp/FFmpeg-Builds releases](https://github.com/yt-dlp/FFmpeg-Builds/releases).
+2. Pick an **immutable** release tag (e.g. `autobuild-2026-03-31-15-13`). Do **not** use the mutable `latest` tag for pinning.
+3. In that release, find the Windows x64 GPL zip, e.g.:
+   - `ffmpeg-N-123778-g3b55818764-win64-gpl.zip`
+4. Get its SHA256 from the asset digest or by downloading it and running:
+   ```powershell
+   Get-FileHash -Path ffmpeg.zip -Algorithm SHA256
+   ```
+5. Edit the script and set:
+   - `$ffmpegReleaseTag` = chosen immutable tag
+   - `$ffmpegArchiveName` = chosen zip filename
+   - `$expectedFfmpegZipHash` = SHA256 from step 4
+6. Run the script and then a Windows build to confirm.
 
 ---
 
