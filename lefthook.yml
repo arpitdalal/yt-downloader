@@ -19,6 +19,13 @@ pre-commit:
       run: cargo fmt --manifest-path src-tauri/Cargo.toml
       stage_fixed: true
 
+# First line must match Conventional Commits (types below); Merge/Revert lines allowed.
+commit-msg:
+  commands:
+    conventional-commit:
+      run: |
+        bash -c 'm=$(head -n1 "$1"); case "$m" in "Merge "*|"Revert "*) exit 0;; esac; printf "%s\n" "$m" | grep -qE "^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\([^)]+\))?(!)?: .+" || { echo "Commit message must follow Conventional Commits" >&2; exit 1; }' _ {1}
+
 pre-push:
   commands:
     release-tag-version:
