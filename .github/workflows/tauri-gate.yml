@@ -45,7 +45,7 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Bundle dependencies (macOS)
         if: runner.os == 'macOS'

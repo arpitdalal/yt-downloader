@@ -143,7 +143,7 @@ deploy-website:
       with:
         node-version: "22"
         cache: "pnpm"
-    - run: pnpm install --frozen-lockfile
+    - run: pnpm install --frozen-lockfile --ignore-scripts
     - run: pnpm --filter website build
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -192,7 +192,7 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm --filter website build
       - uses: actions/upload-pages-artifact@v3
         with:
