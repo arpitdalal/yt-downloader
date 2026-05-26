@@ -15,6 +15,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yt_dlp
 from yt_dlp import cookies as yt_dlp_cookies
@@ -2940,12 +2941,18 @@ class YouTubeDownloader:
             return False
 
         try:
-            # Basic URL validation
-            if not url.startswith(("http://", "https://")):
+            parsed_url = urlparse(url)
+            if parsed_url.scheme not in ("http", "https"):
                 return False
 
-            # Check if it's a YouTube URL
-            if "youtube.com" not in url and "youtu.be" not in url:
+            hostname = parsed_url.hostname
+            if not hostname:
+                return False
+
+            normalized_hostname = hostname.lower().removeprefix("www.")
+            is_youtube_domain = normalized_hostname == "youtube.com" or (normalized_hostname.endswith(".youtube.com"))
+            is_youtu_be_domain = normalized_hostname == "youtu.be"
+            if not is_youtube_domain and not is_youtu_be_domain:
                 return False
 
             # Try to extract info to validate

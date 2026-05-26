@@ -12,7 +12,7 @@
 		"test": "pnpm test:rust && pnpm test:python && pnpm test:frontend",
 		"test:rust": "cd src-tauri && cargo test",
 		"test:python": "python -m pytest python/test_downloader.py",
-		"test:frontend": "vitest run app/lib/cookie-selection.test.ts",
+		"test:frontend": "vitest run app/lib/*.test.ts",
 		"test:python:realworld": "cross-env RUN_REAL_WORLD_TESTS=1 python -m pytest python/test_downloader_real_world.py -s",
 		"build": "vite build",
 		"tauri:build": "tauri build",

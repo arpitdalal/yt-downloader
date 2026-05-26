@@ -9,6 +9,12 @@ import {
 	resolveOverrideToSelection,
 } from "./lib/cookie-selection.js";
 import {
+	createSection,
+	type Section,
+	type SectionTimeField,
+	updateSectionTime,
+} from "./lib/sections.js";
+import {
 	type CookieSelection,
 	type CookieSource,
 	type DownloadProgressData,
@@ -24,8 +30,6 @@ type DownloadStatus =
 	| "completed"
 	| "error";
 
-type Section = { start: string; end: string };
-
 function loadStoredCookieSelection(): CookieSelection {
 	try {
 		const raw = localStorage.getItem(COOKIE_SELECTION_STORAGE_KEY);
@@ -39,9 +43,12 @@ function loadStoredCookieSelection(): CookieSelection {
 }
 
 export default function App() {
+	const nextSectionIdRef = useRef(1);
 	const [url, setUrl] = useState("");
 	const [localFile, setLocalFile] = useState<string | null>(null);
-	const [sections, setSections] = useState<Section[]>([{ start: "", end: "" }]);
+	const [sections, setSections] = useState<Section[]>(() => [
+		createSection("section-0"),
+	]);
 	const [status, setStatus] = useState<DownloadStatus>("idle");
 	const statusRef = useRef<DownloadStatus>("idle");
 	const [progress, setProgress] = useState(0);
@@ -83,6 +90,16 @@ export default function App() {
 		},
 		[],
 	);
+
+	const createNextSection = useCallback(() => {
+		const section = createSection(`section-${nextSectionIdRef.current}`);
+		nextSectionIdRef.current += 1;
+		return section;
+	}, []);
+
+	const resetSections = useCallback(() => {
+		setSections([createNextSection()]);
+	}, [createNextSection]);
 
 	// Set up progress listener once; use a ref to avoid resubscription races.
 	useEffect(() => {
@@ -305,23 +322,25 @@ export default function App() {
 	};
 
 	const addSection = () => {
-		setSections([...sections, { start: "", end: "" }]);
+		setSections((currentSections) => [...currentSections, createNextSection()]);
 	};
 
 	const removeSection = (index: number) => {
-		if (sections.length > 1) {
-			setSections(sections.filter((_, i) => i !== index));
-		}
+		setSections((currentSections) =>
+			currentSections.length > 1
+				? currentSections.filter((_, i) => i !== index)
+				: currentSections,
+		);
 	};
 
 	const updateSection = (
 		index: number,
-		field: "start" | "end",
+		field: SectionTimeField,
 		value: string,
 	) => {
-		const newSections = [...sections];
-		newSections[index] = { ...newSections[index], [field]: value };
-		setSections(newSections);
+		setSections((currentSections) =>
+			updateSectionTime(currentSections, index, field, value),
+		);
 	};
 
 	const describeCookieSourceState = (source: CookieSource): string => {
@@ -581,7 +600,7 @@ export default function App() {
 			// Reset form (optional, maybe keep it populated? Current behavior resets)
 			if (!localFile) setUrl("");
 			setLocalFile(null);
-			setSections([{ start: "", end: "" }]);
+			resetSections();
 		} catch (err) {
 			// Ignore cancellation errors - user already canceled
 			const errorMessage = err instanceof Error ? err.message : String(err);
@@ -610,7 +629,7 @@ export default function App() {
 			setError(null);
 			setUrl("");
 			setLocalFile(null);
-			setSections([{ start: "", end: "" }]);
+			resetSections();
 			setVideoInfo(null);
 			setSuccessMessage(null);
 			setCookieSelectionOverride(COOKIE_OVERRIDE_USE_DEFAULT);
@@ -893,7 +912,7 @@ export default function App() {
 
 							{sections.map((section, index) => (
 								<div
-									key={`section-${index}-${section.start}-${section.end}`}
+									key={section.id}
 									className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-4 items-end"
 								>
 									<div>
