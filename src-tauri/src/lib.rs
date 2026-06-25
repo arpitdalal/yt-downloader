@@ -629,6 +629,29 @@ fn default_cookie_browser_list() -> &'static str {
     }
 }
 
+fn push_cookie_selection_env_overrides(
+    env_overrides: &mut Vec<(&'static str, String)>,
+    selection: &CookieSelection,
+    selected_cookie_sources: Option<&[CookieSource]>,
+) -> Result<(), String> {
+    let mode = parse_cookie_selection_mode(&selection.mode)?;
+    let enable_browser_cookies =
+        env::var("YT_DLP_ENABLE_BROWSER_COOKIES").unwrap_or_else(|_| "true".to_string());
+    let cookies_enabled = env_truthy_from_value(&enable_browser_cookies, true);
+    env_overrides.push(("YT_DLP_ENABLE_BROWSER_COOKIES", enable_browser_cookies));
+    env_overrides.push(("YT_DLP_COOKIE_SELECTION_MODE", mode.to_string()));
+    if cookies_enabled {
+        if let Some(explicit_sources) =
+            selected_cookie_sources.filter(|sources| !sources.is_empty())
+        {
+            let explicit_sources_json =
+                serde_json::to_string(explicit_sources).unwrap_or_else(|_| "[]".to_string());
+            env_overrides.push(("YT_DLP_COOKIE_SOURCES_JSON", explicit_sources_json));
+        }
+    }
+    Ok(())
+}
+
 fn yt_dlp_env_overrides(
     app: &AppHandle,
     ffmpeg_path: Option<&Path>,
@@ -641,16 +664,11 @@ fn yt_dlp_env_overrides(
     }
 
     if let Some(selection) = cookie_selection {
-        let mode = parse_cookie_selection_mode(&selection.mode)?;
-        env_overrides.push(("YT_DLP_ENABLE_BROWSER_COOKIES", "true".to_string()));
-        env_overrides.push(("YT_DLP_COOKIE_SELECTION_MODE", mode.to_string()));
-        if let Some(explicit_sources) =
-            selected_cookie_sources.filter(|sources| !sources.is_empty())
-        {
-            let explicit_sources_json =
-                serde_json::to_string(explicit_sources).unwrap_or_else(|_| "[]".to_string());
-            env_overrides.push(("YT_DLP_COOKIE_SOURCES_JSON", explicit_sources_json));
-        }
+        push_cookie_selection_env_overrides(
+            &mut env_overrides,
+            selection,
+            selected_cookie_sources,
+        )?;
     } else {
         let enable_browser_cookies =
             env::var("YT_DLP_ENABLE_BROWSER_COOKIES").unwrap_or_else(|_| "true".to_string());
@@ -1344,14 +1362,20 @@ fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn env_truthy_from_value(value: &str, default: bool) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return default;
+    }
+    matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn env_truthy(var_name: &str, default: bool) -> bool {
     match env::var(var_name) {
-        Ok(value) => {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        }
+        Ok(value) => env_truthy_from_value(&value, default),
         Err(_) => default,
     }
 }
@@ -2165,6 +2189,61 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         {
             String::from("/tmp/video.mp4")
+        }
+    }
+
+    #[test]
+    fn env_truthy_from_value_handles_common_false_values() {
+        assert!(!super::env_truthy_from_value("false", true));
+        assert!(!super::env_truthy_from_value("0", true));
+        assert!(!super::env_truthy_from_value("off", true));
+        assert!(super::env_truthy_from_value("true", false));
+        assert!(super::env_truthy_from_value("", true));
+    }
+
+    #[test]
+    fn cookie_selection_env_skips_sources_when_cookies_disabled() {
+        let previous = env::var("YT_DLP_ENABLE_BROWSER_COOKIES").ok();
+        unsafe {
+            env::set_var("YT_DLP_ENABLE_BROWSER_COOKIES", "false");
+        }
+
+        let selection = CookieSelection {
+            mode: "auto".to_string(),
+            source_id: None,
+        };
+        let sources = [CookieSource {
+            id: "chrome_default".to_string(),
+            browser: "chrome".to_string(),
+            browser_label: "Chrome".to_string(),
+            profile: None,
+            profile_label: None,
+            container: None,
+            keyring: None,
+            available: true,
+            has_youtube_cookies: true,
+            has_youtube_auth_cookies: true,
+            last_error: None,
+            priority: 0,
+        }];
+        let mut env_overrides = Vec::new();
+        super::push_cookie_selection_env_overrides(&mut env_overrides, &selection, Some(&sources))
+            .expect("cookie env overrides");
+
+        assert!(env_overrides
+            .iter()
+            .any(|(key, value)| *key == "YT_DLP_ENABLE_BROWSER_COOKIES" && value == "false"));
+        assert!(!env_overrides
+            .iter()
+            .any(|(key, _)| *key == "YT_DLP_COOKIE_SOURCES_JSON"));
+
+        match previous {
+            Some(value) => unsafe {
+                env::set_var("YT_DLP_ENABLE_BROWSER_COOKIES", value);
+            },
+            None => unsafe {
+                env::remove_var("YT_DLP_ENABLE_BROWSER_COOKIES");
+            },
         }
     }
 }

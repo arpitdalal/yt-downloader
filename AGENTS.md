@@ -2,7 +2,7 @@
 
 Always use conventional commit messages.
 
-## Cursor Cloud specific instructions
+## Cursor Cloud-specific instructions
 
 ### Overview
 

@@ -106,3 +106,40 @@ jobs:
               body,
               labels: ['yt-dlp-update'],
             });
+
+  close-ytdlp-update-issues:
+    name: close-ytdlp-update-issues
+    runs-on: ubuntu-latest
+    needs: check-ytdlp-version
+    if: needs.check-ytdlp-version.outputs.stale == 'false'
+    permissions:
+      issues: write
+    steps:
+      - name: Close resolved yt-dlp update issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pinned = '${{ needs.check-ytdlp-version.outputs.pinned }}';
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'yt-dlp-update',
+              per_page: 100,
+            });
+            for (const issue of existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Auto-closed: \`python/requirements.txt\` now pins yt-dlp ${pinned}, which matches the latest PyPI release.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              console.log('Closed issue:', issue.html_url);
+            }
