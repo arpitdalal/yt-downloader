@@ -356,8 +356,11 @@ fn run_extract_video_info(
         validated_url.clone(),
     ];
 
-    let selected_cookie_sources =
-        resolve_cookie_sources_for_selection(&app, &state, cookie_selection.as_ref())?;
+    let selected_cookie_sources = if browser_cookies_env_enabled() {
+        resolve_cookie_sources_for_selection(&app, &state, cookie_selection.as_ref())?
+    } else {
+        None
+    };
     let python_dir = get_python_working_dir(&python_path);
     let env_overrides = yt_dlp_env_overrides(
         &app,
@@ -434,8 +437,11 @@ fn run_download_video(
         validated.save_path.to_string_lossy().to_string(),
     ];
 
-    let selected_cookie_sources =
-        resolve_cookie_sources_for_selection(&app, &state, options.cookie_selection.as_ref())?;
+    let selected_cookie_sources = if browser_cookies_env_enabled() {
+        resolve_cookie_sources_for_selection(&app, &state, options.cookie_selection.as_ref())?
+    } else {
+        None
+    };
     let python_dir = get_python_working_dir(&python_path);
     let env_overrides = download_env_overrides(
         &app,
@@ -1362,15 +1368,19 @@ fn get_ffmpeg_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn env_truthy_from_value(value: &str, default: bool) -> bool {
+fn env_truthy_from_value(value: &str, _default: bool) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return default;
+        return false;
     }
     matches!(
         trimmed.to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn browser_cookies_env_enabled() -> bool {
+    env_truthy("YT_DLP_ENABLE_BROWSER_COOKIES", true)
 }
 
 fn env_truthy(var_name: &str, default: bool) -> bool {
@@ -1861,6 +1871,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn validates_youtube_urls() {
@@ -2198,10 +2209,11 @@ mod tests {
         assert!(!super::env_truthy_from_value("0", true));
         assert!(!super::env_truthy_from_value("off", true));
         assert!(super::env_truthy_from_value("true", false));
-        assert!(super::env_truthy_from_value("", true));
+        assert!(!super::env_truthy_from_value("", true));
     }
 
     #[test]
+    #[serial]
     fn cookie_selection_env_skips_sources_when_cookies_disabled() {
         let previous = env::var("YT_DLP_ENABLE_BROWSER_COOKIES").ok();
         unsafe {

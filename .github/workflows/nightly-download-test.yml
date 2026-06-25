@@ -117,17 +117,23 @@ jobs:
     steps:
       - name: Close resolved yt-dlp update issues
         uses: actions/github-script@v7
+        env:
+          PINNED: ${{ needs.check-ytdlp-version.outputs.pinned }}
         with:
           script: |
-            const pinned = '${{ needs.check-ytdlp-version.outputs.pinned }}';
+            const pinned = process.env.PINNED;
             const { data: existing } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
+              creator: 'github-actions[bot]',
               labels: 'yt-dlp-update',
               per_page: 100,
             });
             for (const issue of existing) {
+              if (!issue.title.startsWith('yt-dlp update available:')) {
+                continue;
+              }
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,

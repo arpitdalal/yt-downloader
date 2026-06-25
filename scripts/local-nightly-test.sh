@@ -51,12 +51,15 @@ close_nightly_failure_issues() {
 
   local closed=0
   for issue_number in $issue_numbers; do
-    gh issue close "$issue_number" \
-      --repo "$GH_REPO" \
-      --comment "Auto-closed: real-world download tests passed on $(date +%Y-%m-%d)." \
-      >/dev/null
-    echo "Closed issue #$issue_number"
-    closed=$((closed + 1))
+    if gh issue close "$issue_number" \
+        --repo "$GH_REPO" \
+        --comment "Auto-closed: real-world download tests passed on $(date +%Y-%m-%d)." \
+        >/dev/null; then
+      echo "Closed issue #$issue_number"
+      closed=$((closed + 1))
+    else
+      echo "Failed to close issue #$issue_number"
+    fi
   done
   echo "Closed $closed nightly-failure issue(s)."
 }
