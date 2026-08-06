@@ -1,6 +1,6 @@
 {
 	"name": "yt-downloader",
-	"version": "2.2.2",
+	"version": "2.3.0",
 	"description": "YouTube Downloader Application",
 	"author": "Arpit Dalal <arpitdalalm@gmail.com>",
 	"private": true,
