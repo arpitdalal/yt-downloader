@@ -120,7 +120,19 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-        run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg --ci
+        run: |
+          set -euo pipefail
+          set +e
+          pnpm tauri build --target aarch64-apple-darwin --bundles dmg --ci 2>&1 | tee "$RUNNER_TEMP/tauri-macos-build.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            if grep -Eqi 'required agreement is missing or has expired|necessary legal agreements' "$RUNNER_TEMP/tauri-macos-build.log"; then
+              echo "::error::Apple notarization blocked: a Developer/App Store Connect agreement is missing or expired."
+              echo "::error::Account holder/Admin must accept pending agreements at https://developer.apple.com/account and https://appstoreconnect.apple.com/agreements, then re-run this workflow."
+            fi
+            exit "$status"
+          fi
 
       - name: Verify macOS bundle trust
         env:

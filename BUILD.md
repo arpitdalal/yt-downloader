@@ -81,3 +81,6 @@ After `pnpm install`, lefthook installs git hooks; pre-commit formats staged fil
 - Run `node scripts/prebuild.js` to ensure resource folders exist.
 - Run `pnpm typecheck` and `source $HOME/.cargo/env && cargo test` in `src-tauri`.
 - See `DEBUGGING.md` for log retrieval and common failures.
+- macOS release notarization `HTTP 403` / "required agreement is missing or has expired":
+  - Signing secrets are fine; Apple is rejecting notarization until legal agreements are accepted.
+  - Account holder/Admin: accept pending agreements at [developer.apple.com/account](https://developer.apple.com/account) and [appstoreconnect.apple.com/agreements](https://appstoreconnect.apple.com/agreements), wait a few minutes, re-run `tauri-release.yml`.
