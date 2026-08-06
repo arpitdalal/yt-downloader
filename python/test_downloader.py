@@ -22,6 +22,8 @@ from downloader import (
     DownloadResult,
     VideoInfo,
     YouTubeDownloader,
+    parse_section_times,
+    parse_timestamp,
 )
 
 # ============================================================================
@@ -129,6 +131,48 @@ def mock_shutil_which():
 # ============================================================================
 # Dataclass Tests
 # ============================================================================
+
+
+# ============================================================================
+# parse_timestamp
+# ============================================================================
+
+
+class TestParseTimestamp:
+    def test_none_and_empty(self):
+        assert parse_timestamp(None) is None
+        assert parse_timestamp("") is None
+        assert parse_timestamp("   ") is None
+
+    def test_plain_seconds(self):
+        assert parse_timestamp(0) == 0
+        assert parse_timestamp(90) == 90
+        assert parse_timestamp("5080") == 5080
+
+    def test_mm_ss(self):
+        assert parse_timestamp("1:30") == 90
+        assert parse_timestamp("0:40") == 40
+        assert parse_timestamp("24:40") == 1480
+
+    def test_h_mm_ss(self):
+        assert parse_timestamp("1:24:40") == 5080
+        assert parse_timestamp("0:01:30") == 90
+        assert parse_timestamp("2:00:00") == 7200
+
+    def test_rejects_invalid(self):
+        with pytest.raises(ValueError, match="Seconds must be between 0 and 59"):
+            parse_timestamp("1:60")
+        with pytest.raises(ValueError, match="Minutes and seconds must be between 0 and 59"):
+            parse_timestamp("1:60:00")
+        with pytest.raises(ValueError, match="Invalid time format"):
+            parse_timestamp("abc")
+        with pytest.raises(ValueError, match="non-negative"):
+            parse_timestamp(-1)
+
+    def test_parse_section_times(self):
+        assert parse_section_times({"start": "1:24:40", "end": "2:00:00"}) == (5080, 7200)
+        assert parse_section_times({"start": 10, "end": None}) == (10, None)
+        assert parse_section_times("not-a-dict") == (None, None)
 
 
 class TestVideoInfo:

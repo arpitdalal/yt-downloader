@@ -10,6 +10,7 @@ import {
 } from "./lib/cookie-selection.js";
 import {
 	createSection,
+	parseTimestamp,
 	type Section,
 	type SectionTimeField,
 	updateSectionTime,
@@ -373,6 +374,30 @@ export default function App() {
 					globalCookieSelection,
 				);
 
+	const parseSectionTime = (
+		value: string,
+		fieldLabel: string,
+		sectionNumber: number,
+	): { seconds: number | null; error: string | null } => {
+		try {
+			const seconds = parseTimestamp(value);
+			if (seconds !== null && seconds < 0) {
+				return {
+					seconds: null,
+					error: `${fieldLabel} of section ${sectionNumber} must be non-negative`,
+				};
+			}
+			return { seconds, error: null };
+		} catch (error) {
+			const detail =
+				error instanceof Error ? error.message : "Invalid time format";
+			return {
+				seconds: null,
+				error: `${fieldLabel} of section ${sectionNumber}: ${detail}`,
+			};
+		}
+	};
+
 	const validateSections = (): string | null => {
 		// At least one section required
 		if (sections.length === 0) {
@@ -382,10 +407,16 @@ export default function App() {
 		// Validate each section
 		for (let i = 0; i < sections.length; i++) {
 			const section = sections[i];
-			const start = section.start.trim()
-				? parseInt(section.start.trim(), 10)
-				: null;
-			const end = section.end.trim() ? parseInt(section.end.trim(), 10) : null;
+			const startResult = parseSectionTime(section.start, "Start time", i + 1);
+			if (startResult.error) {
+				return startResult.error;
+			}
+			const endResult = parseSectionTime(section.end, "End time", i + 1);
+			if (endResult.error) {
+				return endResult.error;
+			}
+			const start = startResult.seconds;
+			const end = endResult.seconds;
 
 			// Start time of subsequent sections cannot be empty
 			if (i > 0 && start === null) {
@@ -399,22 +430,6 @@ export default function App() {
 				} cannot be empty (it has a next section)`;
 			}
 
-			// Validate start time if provided
-			if (start !== null) {
-				if (Number.isNaN(start) || start < 0) {
-					return `Start time of section ${
-						i + 1
-					} must be a valid positive number`;
-				}
-			}
-
-			// Validate end time if provided
-			if (end !== null) {
-				if (Number.isNaN(end) || end < 0) {
-					return `End time of section ${i + 1} must be a valid positive number`;
-				}
-			}
-
 			// Validate start < end within section
 			if (start !== null && end !== null && start >= end) {
 				return `End time must be greater than start time in section ${i + 1}`;
@@ -423,22 +438,34 @@ export default function App() {
 			// Validate ordering: next section's start must not be before current section's end
 			if (i < sections.length - 1) {
 				const nextSection = sections[i + 1];
-				const nextStart = nextSection.start.trim()
-					? parseInt(nextSection.start.trim(), 10)
-					: null;
+				const nextStartResult = parseSectionTime(
+					nextSection.start,
+					"Start time",
+					i + 2,
+				);
+				if (nextStartResult.error) {
+					return nextStartResult.error;
+				}
+				const nextStart = nextStartResult.seconds;
 
 				if (end !== null && nextStart !== null && nextStart < end) {
 					return `Start time of section ${
 						i + 2
-					} (${nextStart}s) cannot be before end time of section ${
+					} (${nextSection.start.trim()}) cannot be before end time of section ${
 						i + 1
-					} (${end}s)`;
+					} (${section.end.trim()})`;
 				}
 			}
 		}
 
 		return null;
 	};
+
+	const sectionsToApiPayload = () =>
+		sections.map((s) => ({
+			start: parseTimestamp(s.start),
+			end: parseTimestamp(s.end),
+		}));
 
 	const handleChooseFile = async () => {
 		try {
@@ -516,16 +543,10 @@ export default function App() {
 					setStatusSynced("error");
 					return;
 				}
-				// Convert sections to format expected by backend
-				const sectionsArray = sections.map((s) => ({
-					start: s.start.trim() ? parseInt(s.start.trim(), 10) : null,
-					end: s.end.trim() ? parseInt(s.end.trim(), 10) : null,
-				}));
-
 				const result = await tauriAPI.processLocalVideo({
 					inputPath: localFile,
 					savePath: dialogResult.filePath,
-					sections: sectionsArray,
+					sections: sectionsToApiPayload(),
 				});
 
 				setStatusSynced("completed");
@@ -574,16 +595,10 @@ export default function App() {
 				setStatusSynced("downloading");
 				setProgressSynced(0);
 
-				// Convert sections to format expected by backend
-				const sectionsArray = sections.map((s) => ({
-					start: s.start.trim() ? parseInt(s.start.trim(), 10) : null,
-					end: s.end.trim() ? parseInt(s.end.trim(), 10) : null,
-				}));
-
 				const result = await tauriAPI.downloadVideo({
 					url: url.trim(),
 					savePath,
-					sections: sectionsArray,
+					sections: sectionsToApiPayload(),
 					cookieSelection: submitCookieSelection,
 				});
 
@@ -909,6 +924,9 @@ export default function App() {
 									+ Add Section
 								</button>
 							</div>
+							<p className="text-xs text-gray-500">
+								Times accept seconds, MM:SS, or H:MM:SS (e.g. 90, 1:30, 1:24:40)
+							</p>
 
 							{sections.map((section, index) => (
 								<div
@@ -920,20 +938,23 @@ export default function App() {
 											htmlFor={`startTime-${index}`}
 											className="block text-sm font-medium text-gray-700 mb-2"
 										>
-											Start Time (seconds){" "}
+											Start Time{" "}
 											{index > 0 && <span className="text-red-500">*</span>}
 										</label>
 										<input
-											type="number"
+											type="text"
 											id={`startTime-${index}`}
 											name={`startTime-${index}`}
 											value={section.start}
 											onChange={(e) =>
 												updateSection(index, "start", e.target.value)
 											}
-											placeholder={index === 0 ? "0" : "Required"}
-											min="0"
-											step="1"
+											placeholder={
+												index === 0 ? "0 or 0:00:00" : "e.g. 1:24:40"
+											}
+											inputMode="numeric"
+											autoComplete="off"
+											spellCheck={false}
 											className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
 											disabled={
 												status === "extracting" || status === "downloading"
@@ -947,13 +968,13 @@ export default function App() {
 											htmlFor={`endTime-${index}`}
 											className="block text-sm font-medium text-gray-700 mb-2"
 										>
-											End Time (seconds){" "}
+											End Time{" "}
 											{index < sections.length - 1 && (
 												<span className="text-red-500">*</span>
 											)}
 										</label>
 										<input
-											type="number"
+											type="text"
 											id={`endTime-${index}`}
 											name={`endTime-${index}`}
 											value={section.end}
@@ -962,11 +983,12 @@ export default function App() {
 											}
 											placeholder={
 												index < sections.length - 1
-													? "Required"
-													: "Leave empty for end of video"
+													? "e.g. 1:30:00"
+													: "Empty = end of video"
 											}
-											min="0"
-											step="1"
+											inputMode="numeric"
+											autoComplete="off"
+											spellCheck={false}
 											className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
 											disabled={
 												status === "extracting" || status === "downloading"

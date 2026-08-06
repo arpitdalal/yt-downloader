@@ -78,6 +78,55 @@ YT_DLP_PRESET_ALIASES = {
 }
 
 
+def parse_timestamp(value: int | float | str | None) -> int | None:
+    """Convert a timestamp to whole seconds for ffmpeg.
+
+    Accepts plain seconds (90), MM:SS ("1:30"), or H:MM:SS ("1:24:40").
+    Empty/None returns None. Invalid values raise ValueError.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("Invalid time format")
+    if isinstance(value, (int, float)):
+        if value < 0 or int(value) != value:
+            raise ValueError("Time must be a non-negative whole number of seconds")
+        return int(value)
+
+    trimmed = str(value).strip()
+    if not trimmed:
+        return None
+
+    if re.fullmatch(r"\d+", trimmed):
+        return int(trimmed)
+
+    parts = trimmed.split(":")
+    if len(parts) not in (2, 3):
+        raise ValueError("Invalid time format. Use seconds, MM:SS, or H:MM:SS (e.g. 90, 1:30, 1:24:40)")
+
+    if not all(re.fullmatch(r"\d+", part) for part in parts):
+        raise ValueError("Invalid time format. Use seconds, MM:SS, or H:MM:SS (e.g. 90, 1:30, 1:24:40)")
+
+    nums = [int(part) for part in parts]
+    if len(nums) == 2:
+        minutes, seconds = nums
+        if seconds >= 60:
+            raise ValueError("Seconds must be between 0 and 59")
+        return minutes * 60 + seconds
+
+    hours, minutes, seconds = nums
+    if minutes >= 60 or seconds >= 60:
+        raise ValueError("Minutes and seconds must be between 0 and 59")
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def parse_section_times(section: object) -> tuple[int | None, int | None]:
+    """Parse a section dict into (start_seconds, end_seconds)."""
+    if not isinstance(section, dict):
+        return None, None
+    return parse_timestamp(section.get("start")), parse_timestamp(section.get("end"))
+
+
 @dataclass
 class VideoInfo:
     """Video information extracted from YouTube"""
@@ -3036,15 +3085,16 @@ def main():
                 try:
                     parsed_sections = json.loads(sections_json)
                     if isinstance(parsed_sections, list):
-                        sections = [
-                            (
-                                section.get("start") if isinstance(section, dict) else None,
-                                section.get("end") if isinstance(section, dict) else None,
-                            )
-                            for section in parsed_sections
-                        ]
-                except json.JSONDecodeError:
-                    sys.stdout.write(json.dumps({"success": False, "error_message": "Invalid sections JSON"}))
+                        sections = [parse_section_times(section) for section in parsed_sections]
+                except (json.JSONDecodeError, ValueError, TypeError) as e:
+                    sys.stdout.write(
+                        json.dumps(
+                            {
+                                "success": False,
+                                "error_message": f"Invalid sections: {str(e)}",
+                            }
+                        )
+                    )
                     sys.stdout.flush()
                     sys.exit(1)
 
@@ -3162,13 +3212,7 @@ def main():
                     parsed_sections = json.loads(arg4)
                     if isinstance(parsed_sections, list) and len(parsed_sections) > 0:
                         # Convert to list of tuples
-                        sections = [
-                            (
-                                section.get("start") if isinstance(section, dict) else None,
-                                section.get("end") if isinstance(section, dict) else None,
-                            )
-                            for section in parsed_sections
-                        ]
+                        sections = [parse_section_times(section) for section in parsed_sections]
                     else:
                         sys.stdout.write(
                             json.dumps(
@@ -3194,9 +3238,7 @@ def main():
             else:
                 # Not JSON, treat as legacy format (single start_time)
                 try:
-                    start_time = int(arg4)
-                    if start_time < 0:
-                        start_time = None
+                    start_time = parse_timestamp(arg4)
                 except (ValueError, TypeError):
                     start_time = None
                 # In this case, output_path is already set from sys.argv[-1]
@@ -3204,17 +3246,13 @@ def main():
         # Legacy format: arg4 is start_time, arg5 is end_time
         if len(sys.argv) > 4 and sys.argv[4] and sys.argv[4].strip():
             try:
-                start_time = int(sys.argv[4])
-                if start_time < 0:
-                    start_time = None
+                start_time = parse_timestamp(sys.argv[4])
             except (ValueError, TypeError):
                 start_time = None
 
         if len(sys.argv) > 5 and sys.argv[5] and sys.argv[5].strip():
             try:
-                end_time = int(sys.argv[5])
-                if end_time < 0:
-                    end_time = None
+                end_time = parse_timestamp(sys.argv[5])
             except (ValueError, TypeError):
                 end_time = None
 
