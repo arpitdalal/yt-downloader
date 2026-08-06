@@ -172,7 +172,8 @@ class TestParseTimestamp:
     def test_parse_section_times(self):
         assert parse_section_times({"start": "1:24:40", "end": "2:00:00"}) == (5080, 7200)
         assert parse_section_times({"start": 10, "end": None}) == (10, None)
-        assert parse_section_times("not-a-dict") == (None, None)
+        with pytest.raises(ValueError, match="Each section must be an object"):
+            parse_section_times("not-a-dict")
 
 
 class TestVideoInfo:

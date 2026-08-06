@@ -123,7 +123,7 @@ def parse_timestamp(value: int | float | str | None) -> int | None:
 def parse_section_times(section: object) -> tuple[int | None, int | None]:
     """Parse a section dict into (start_seconds, end_seconds)."""
     if not isinstance(section, dict):
-        return None, None
+        raise ValueError("Each section must be an object")
     return parse_timestamp(section.get("start")), parse_timestamp(section.get("end"))
 
 
@@ -3084,8 +3084,9 @@ def main():
             if sections_json and sections_json.strip() and sections_json != "[]":
                 try:
                     parsed_sections = json.loads(sections_json)
-                    if isinstance(parsed_sections, list):
-                        sections = [parse_section_times(section) for section in parsed_sections]
+                    if not isinstance(parsed_sections, list):
+                        raise ValueError("Invalid sections format: empty list or not a list")
+                    sections = [parse_section_times(section) for section in parsed_sections]
                 except (json.JSONDecodeError, ValueError, TypeError) as e:
                     sys.stdout.write(
                         json.dumps(
@@ -3239,22 +3240,28 @@ def main():
                 # Not JSON, treat as legacy format (single start_time)
                 try:
                     start_time = parse_timestamp(arg4)
-                except (ValueError, TypeError):
-                    start_time = None
+                except (ValueError, TypeError) as e:
+                    sys.stdout.write(json.dumps({"success": False, "error": f"Invalid start_time: {e}"}))
+                    sys.stdout.flush()
+                    sys.exit(1)
                 # In this case, output_path is already set from sys.argv[-1]
     elif len(sys.argv) >= 7:
         # Legacy format: arg4 is start_time, arg5 is end_time
         if len(sys.argv) > 4 and sys.argv[4] and sys.argv[4].strip():
             try:
                 start_time = parse_timestamp(sys.argv[4])
-            except (ValueError, TypeError):
-                start_time = None
+            except (ValueError, TypeError) as e:
+                sys.stdout.write(json.dumps({"success": False, "error": f"Invalid start_time: {e}"}))
+                sys.stdout.flush()
+                sys.exit(1)
 
         if len(sys.argv) > 5 and sys.argv[5] and sys.argv[5].strip():
             try:
                 end_time = parse_timestamp(sys.argv[5])
-            except (ValueError, TypeError):
-                end_time = None
+            except (ValueError, TypeError) as e:
+                sys.stdout.write(json.dumps({"success": False, "error": f"Invalid end_time: {e}"}))
+                sys.stdout.flush()
+                sys.exit(1)
 
     if not output_path:
         sys.stdout.write(json.dumps({"success": False, "error": "Output path is required"}))

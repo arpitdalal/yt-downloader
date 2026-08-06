@@ -952,7 +952,6 @@ export default function App() {
 											placeholder={
 												index === 0 ? "0 or 0:00:00" : "e.g. 1:24:40"
 											}
-											inputMode="numeric"
 											autoComplete="off"
 											spellCheck={false}
 											className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -986,7 +985,6 @@ export default function App() {
 													? "e.g. 1:30:00"
 													: "Empty = end of video"
 											}
-											inputMode="numeric"
 											autoComplete="off"
 											spellCheck={false}
 											className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
