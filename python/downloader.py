@@ -1634,17 +1634,17 @@ class YouTubeDownloader:
         return None
 
     @staticmethod
-    def _is_quicktime_video_codec(codec: str | None) -> bool:
+    def _is_quicktime_video_codec(codec: str | None, target_extension: str = ".mp4") -> bool:
         normalized = str(codec or "").strip().lower()
         if normalized in ("", "none"):
             return True
-        return (
+        is_h264_or_hevc = (
             normalized.startswith("avc1")
             or normalized.startswith("h264")
             or normalized.startswith("hevc")
             or normalized.startswith("h265")
-            or normalized.startswith("prores")
         )
+        return is_h264_or_hevc or (target_extension == ".mov" and normalized.startswith("prores"))
 
     @staticmethod
     def _is_quicktime_audio_codec(codec: str | None) -> bool:
@@ -1671,7 +1671,8 @@ class YouTubeDownloader:
         if source_ext not in (".mp4", ".m4v", ".mov"):
             return True
 
-        if not YouTubeDownloader._is_quicktime_video_codec(source_video_codec):
+        target_extension = output_path.suffix.lower()
+        if not YouTubeDownloader._is_quicktime_video_codec(source_video_codec, target_extension):
             return True
 
         if not YouTubeDownloader._is_quicktime_audio_codec(source_audio_codec):
@@ -1681,7 +1682,7 @@ class YouTubeDownloader:
             return False
 
         video_codec = str(selected_format.get("vcodec") or "").strip().lower()
-        if not YouTubeDownloader._is_quicktime_video_codec(video_codec):
+        if not YouTubeDownloader._is_quicktime_video_codec(video_codec, target_extension):
             return True
 
         audio_codec = str(selected_format.get("acodec") or "").strip().lower()
@@ -1830,9 +1831,9 @@ class YouTubeDownloader:
                     "-select_streams",
                     "v",
                     "-show_entries",
-                    "stream=pix_fmt",
+                    "stream=pix_fmt:stream_tags=alpha_mode",
                     "-of",
-                    "default=nw=1:nk=1",
+                    "json",
                     str(input_path),
                 ],
                 capture_output=True,
@@ -1840,15 +1841,64 @@ class YouTubeDownloader:
                 check=False,
                 timeout=15,
             )
-            if not isinstance(result.stdout, str):
+            if result.returncode != 0 or not isinstance(result.stdout, str):
                 return False
-            pixel_formats = result.stdout.lower().splitlines()
+            payload = json.loads(result.stdout)
+            streams = payload.get("streams") or []
             return any(
-                pixel_format.startswith(("yuva", "rgba", "bgra", "argb", "abgr", "gbrap"))
-                for pixel_format in pixel_formats
+                isinstance(stream, dict)
+                and (
+                    str(stream.get("pix_fmt") or "")
+                    .lower()
+                    .startswith(("yuva", "rgba", "bgra", "argb", "abgr", "gbrap"))
+                    or str((stream.get("tags") or {}).get("alpha_mode") or "").lower() in ("1", "true", "yes")
+                )
+                for stream in streams
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
             return False
+
+    def _text_subtitle_map_args(self, input_path: Path, output_extension: str) -> list[str]:
+        """Map only subtitles that FFmpeg can safely encode as text."""
+        if output_extension == ".mkv":
+            return ["-map", "0:s?"]
+        if output_extension not in (".mp4", ".m4v", ".mov", ".webm"):
+            return []
+
+        ffprobe_path = self._resolve_ffprobe_path()
+        if not ffprobe_path:
+            return []
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe_path,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "s",
+                    "-show_entries",
+                    "stream=codec_name",
+                    "-of",
+                    "json",
+                    str(input_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+            if result.returncode != 0 or not isinstance(result.stdout, str):
+                return []
+            streams = json.loads(result.stdout).get("streams") or []
+            text_codecs = {"ass", "mov_text", "ssa", "subrip", "text", "webvtt"}
+            return [
+                item
+                for index, stream in enumerate(streams)
+                if isinstance(stream, dict) and str(stream.get("codec_name") or "").lower() in text_codecs
+                for item in ("-map", f"0:s:{index}?")
+            ]
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
+            return []
 
     def _remux_copy(self, input_path: Path, output_path: Path, output_format: str | None = None) -> bool:
         ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
@@ -2177,10 +2227,12 @@ class YouTubeDownloader:
             print("MP4 output cannot preserve video transparency; save as .mov, .mkv, or .webm", file=sys.stderr)
             return False
 
-        # Preserve every intended video/audio/subtitle track rather than
-        # forcing the first stream of each type. This also supports audio-only
-        # inputs, which have no video stream to map.
-        cmd.extend(["-map", "0:v?", "-map", "0:a?", "-map", "0:s?"])
+        # Preserve every intended video/audio track rather than forcing the
+        # first stream of each type. This also supports audio-only inputs.
+        # Text subtitles are selected separately so bitmap subtitles never
+        # make text-only MP4/MOV/WebM encoders fail the whole cut.
+        cmd.extend(["-map", "0:v?", "-map", "0:a?"])
+        cmd.extend(self._text_subtitle_map_args(input_path_obj, output_extension))
 
         if output_extension == ".webm":
             cmd.extend(

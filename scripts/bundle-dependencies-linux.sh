@@ -124,20 +124,24 @@ FFMPEG_URL="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/${FFMPEG_R
 
 curl -fSL -o ffmpeg.tar.xz "$FFMPEG_URL"
 echo "$FFMPEG_SHA256  ffmpeg.tar.xz" | sha256sum -c -
-tar -xf ffmpeg.tar.xz -C "$FFMPEG_DIR" --strip-components=2 "${FFMPEG_ARCHIVE_BASE}/bin/ffmpeg"
-chmod +x "$FFMPEG_DIR/ffmpeg"
+tar -xf ffmpeg.tar.xz -C "$FFMPEG_DIR" --strip-components=2 \
+  "${FFMPEG_ARCHIVE_BASE}/bin/ffmpeg" \
+  "${FFMPEG_ARCHIVE_BASE}/bin/ffprobe"
+chmod +x "$FFMPEG_DIR/ffmpeg" "$FFMPEG_DIR/ffprobe"
 rm -f ffmpeg.tar.xz
 
 "$FFMPEG_DIR/ffmpeg" -version >/dev/null 2>&1 || { echo "ERROR: bundled ffmpeg binary does not execute"; exit 1; }
+"$FFMPEG_DIR/ffprobe" -version >/dev/null 2>&1 || { echo "ERROR: bundled ffprobe binary does not execute"; exit 1; }
 echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
 printf '\n=== Summary ===\n'
-if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" && -f "$JSRUNTIME_DIR/node" ]]; then
+if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" && -f "$FFMPEG_DIR/ffprobe" && -f "$JSRUNTIME_DIR/node" ]]; then
   echo "All dependencies bundled for Tauri."
   echo "Python: $PYTHON_DIR/bin/python3"
   echo "Script: $PYTHON_DIR/downloader.py"
   echo "JS runtime: $JSRUNTIME_DIR/node"
   echo "FFmpeg: $FFMPEG_DIR/ffmpeg"
+  echo "FFprobe: $FFMPEG_DIR/ffprobe"
   echo "Next: pnpm tauri:build:linux"
 else
   echo "Dependency bundling failed."

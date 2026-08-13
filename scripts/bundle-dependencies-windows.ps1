@@ -124,10 +124,12 @@ try {
     Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp -Force
 
     $ffmpegSource = Get-ChildItem ffmpeg-temp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-    if ($null -eq $ffmpegSource) {
-        throw "Failed to locate ffmpeg.exe in archive"
+    $ffprobeSource = Get-ChildItem ffmpeg-temp -Recurse -Filter ffprobe.exe | Select-Object -First 1
+    if ($null -eq $ffmpegSource -or $null -eq $ffprobeSource) {
+        throw "Failed to locate ffmpeg.exe or ffprobe.exe in archive"
     }
     Copy-Item $ffmpegSource.FullName (Join-Path $ffmpegDir "ffmpeg.exe") -Force
+    Copy-Item $ffprobeSource.FullName (Join-Path $ffmpegDir "ffprobe.exe") -Force
     Remove-Item -Recurse -Force ffmpeg-temp
     Remove-Item ffmpeg.zip
 } catch {
@@ -142,14 +144,16 @@ Write-Host "`n=== Summary ===" -ForegroundColor Yellow
 $pythonExe = Join-Path $pythonDir "python.exe"
 $pythonScript = Join-Path $pythonDir "downloader.py"
 $ffmpegExe = Join-Path $ffmpegDir "ffmpeg.exe"
+$ffprobeExe = Join-Path $ffmpegDir "ffprobe.exe"
 $nodeExe = Join-Path $jsRuntimeDir "node.exe"
 
-if ((Test-Path $pythonExe) -and (Test-Path $pythonScript) -and (Test-Path $ffmpegExe) -and (Test-Path $nodeExe)) {
+if ((Test-Path $pythonExe) -and (Test-Path $pythonScript) -and (Test-Path $ffmpegExe) -and (Test-Path $ffprobeExe) -and (Test-Path $nodeExe)) {
     Write-Host "All dependencies bundled for Tauri." -ForegroundColor Green
     Write-Host "Python: $pythonExe"
     Write-Host "Script: $pythonScript"
     Write-Host "JS runtime: $nodeExe"
     Write-Host "FFmpeg: $ffmpegExe"
+    Write-Host "FFprobe: $ffprobeExe"
     Write-Host "Next: pnpm tauri:build:win"
 } else {
     throw "Dependency bundling failed"

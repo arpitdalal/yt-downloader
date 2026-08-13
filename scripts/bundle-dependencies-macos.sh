@@ -108,10 +108,14 @@ case "$PYTHON_ARCH" in
   arm64 | aarch64)
     FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1785863997_9.0/ffmpeg.zip"
     FFMPEG_SHA256="5267ef149ee0d208057a1b316aac079b661b0476574dee5da7d225769773c603"
+    FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1785863997_9.0/ffprobe.zip"
+    FFPROBE_SHA256="7778fbb533fb60d3336cbd9a9e51eced71658f020b570c7203590c1c41d42f50"
     ;;
   x86_64)
     FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1785871427_9.0/ffmpeg.zip"
     FFMPEG_SHA256="79d14663d8b078dbbc38de18d63a30f8a5bfc860af5dfee7f8cf3e387cf1c02c"
+    FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1785871427_9.0/ffprobe.zip"
+    FFPROBE_SHA256="a2dd3f2e7eb35a10fa6ac43b1a8c21890f27bee0dc4a86ddee16a57d72d3898d"
     ;;
   *)
     echo "Unsupported macOS architecture for bundled FFmpeg: $PYTHON_ARCH"
@@ -125,7 +129,14 @@ unzip -o ffmpeg.zip -d "$FFMPEG_DIR"
 chmod +x "$FFMPEG_DIR/ffmpeg"
 rm -f ffmpeg.zip
 
+curl -fSL -o ffprobe.zip "$FFPROBE_URL"
+echo "$FFPROBE_SHA256  ffprobe.zip" | shasum -a 256 -c -
+unzip -o ffprobe.zip -d "$FFMPEG_DIR"
+chmod +x "$FFMPEG_DIR/ffprobe"
+rm -f ffprobe.zip
+
 "$FFMPEG_DIR/ffmpeg" -version >/dev/null 2>&1 || { echo "ERROR: bundled ffmpeg binary does not execute"; exit 1; }
+"$FFMPEG_DIR/ffprobe" -version >/dev/null 2>&1 || { echo "ERROR: bundled ffprobe binary does not execute"; exit 1; }
 echo "OK: FFmpeg bundled at $FFMPEG_DIR"
 
 printf '\n=== Step 4: macOS code signing for bundled runtimes ===\n'
@@ -152,12 +163,13 @@ else
 fi
 
 printf '\n=== Summary ===\n'
-if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" && -f "$JSRUNTIME_DIR/deno" ]]; then
+if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" && -f "$FFMPEG_DIR/ffprobe" && -f "$JSRUNTIME_DIR/deno" ]]; then
   echo "All dependencies bundled for Tauri."
   echo "Python: $PYTHON_DIR/bin/python3"
   echo "Script: $PYTHON_DIR/downloader.py"
   echo "JS runtime: $JSRUNTIME_DIR/deno"
   echo "FFmpeg: $FFMPEG_DIR/ffmpeg"
+  echo "FFprobe: $FFMPEG_DIR/ffprobe"
   echo "Next: pnpm tauri:build:mac"
 else
   echo "Dependency bundling failed."

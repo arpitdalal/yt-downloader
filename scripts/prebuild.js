@@ -18,7 +18,7 @@ const resourcesDirs = [
 	{
 		path: join(resourcesRoot, "ffmpeg"),
 		name: "FFmpeg",
-		required: isWindows ? ["ffmpeg.exe"] : ["ffmpeg"],
+		required: isWindows ? ["ffmpeg.exe", "ffprobe.exe"] : ["ffmpeg", "ffprobe"],
 	},
 	{
 		path: join(resourcesRoot, "jsruntime"),

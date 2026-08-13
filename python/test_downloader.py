@@ -1425,9 +1425,38 @@ class TestCutVideo:
         input_file.write_bytes(b"video data")
         with patch.object(downloader, "_resolve_ffprobe_path", return_value="ffprobe"):
             with patch("downloader.subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="yuv420p\nyuva420p\n")
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='{"streams": [{"pix_fmt": "yuv420p"}, {"pix_fmt": "yuva420p"}]}',
+                )
                 assert downloader._input_has_alpha(input_file)
                 assert "v" in mock_run.call_args.args[0]
+
+    def test_input_has_alpha_detects_webm_alpha_metadata(self, temp_dir):
+        """WebM transparency can be stored in alpha_mode rather than pix_fmt."""
+        downloader = YouTubeDownloader()
+        input_file = temp_dir / "input.webm"
+        input_file.write_bytes(b"video data")
+        with patch.object(downloader, "_resolve_ffprobe_path", return_value="ffprobe"):
+            with patch("downloader.subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='{"streams": [{"pix_fmt": "yuv420p", "tags": {"alpha_mode": "1"}}]}',
+                )
+                assert downloader._input_has_alpha(input_file)
+
+    def test_text_subtitle_map_args_excludes_bitmap_subtitles(self, temp_dir):
+        """Text-only containers must not receive PGS/VobSub subtitle mappings."""
+        downloader = YouTubeDownloader()
+        input_file = temp_dir / "input.mkv"
+        input_file.write_bytes(b"video data")
+        with patch.object(downloader, "_resolve_ffprobe_path", return_value="ffprobe"):
+            with patch("downloader.subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='{"streams": [{"codec_name": "hdmv_pgs_subtitle"}, {"codec_name": "subrip"}]}',
+                )
+                assert downloader._text_subtitle_map_args(input_file, ".mp4") == ["-map", "0:s:1?"]
 
     def test_cut_video_invalid_input(self, temp_dir):
         """Test cutting with non-existent input file"""
@@ -3160,6 +3189,29 @@ class TestDownloadVideo:
                 None,
                 source_video_codec="h264",
                 source_audio_codec="mp4a.40.2",
+            )
+            is False
+        )
+
+    def test_requires_mp4_compatibility_transcode_rejects_prores_for_mp4(self):
+        """ProRes is valid in MOV but must not be remuxed into MP4."""
+        assert (
+            YouTubeDownloader._requires_mp4_compatibility_transcode(
+                Path("source.mov"),
+                Path("output.mp4"),
+                None,
+                source_video_codec="prores",
+                source_audio_codec="aac",
+            )
+            is True
+        )
+        assert (
+            YouTubeDownloader._requires_mp4_compatibility_transcode(
+                Path("source.mov"),
+                Path("output.mov"),
+                None,
+                source_video_codec="prores",
+                source_audio_codec="aac",
             )
             is False
         )
