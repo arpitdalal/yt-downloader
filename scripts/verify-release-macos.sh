@@ -45,6 +45,18 @@ if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
+UPDATER_ARCHIVE="$(find "$TARGET_ROOT" -type f -path "*/bundle/macos/*.app.tar.gz" -print | sort | tail -n 1 || true)"
+if [[ -z "$UPDATER_ARCHIVE" || ! -s "$UPDATER_ARCHIVE" ]]; then
+  echo "ERROR: macOS updater archive not found under $TARGET_ROOT"
+  echo "Expected a non-empty */bundle/macos/*.app.tar.gz (requires --bundles app)"
+  exit 1
+fi
+if [[ ! -s "${UPDATER_ARCHIVE}.sig" ]]; then
+  echo "ERROR: missing updater signature: ${UPDATER_ARCHIVE}.sig"
+  exit 1
+fi
+echo "Found updater archive: $UPDATER_ARCHIVE"
+
 echo "Verifying code signature on: $APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 

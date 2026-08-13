@@ -138,7 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          pnpm tauri build --target aarch64-apple-darwin --bundles dmg --ci 2>&1 | tee "$RUNNER_TEMP/tauri-macos-build.log"
+          pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg --ci 2>&1 | tee "$RUNNER_TEMP/tauri-macos-build.log"
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
@@ -147,6 +147,10 @@ jobs:
               echo "::error::Account holder/Admin must accept pending agreements at https://developer.apple.com/account and https://appstoreconnect.apple.com/agreements, then re-run this workflow."
             fi
             exit "$status"
+          fi
+          if grep -q 'no updater-enabled targets were built' "$RUNNER_TEMP/tauri-macos-build.log"; then
+            echo "::error::macOS updater archive was not produced. Build must include the app bundle target."
+            exit 1
           fi
 
       - name: Verify macOS bundle trust
