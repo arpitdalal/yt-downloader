@@ -20,7 +20,7 @@ Desktop app (Tauri v2 + React + Python yt-dlp) for downloading YouTube videos or
 
 ## Prerequisites
 
-- Node.js 22.13+
+- Node.js 26+
 - pnpm
 - Rust toolchain (cargo/rustc)
 - Python 3.11+

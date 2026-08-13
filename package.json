@@ -6,8 +6,8 @@
 	"private": true,
 	"type": "module",
 	"engines": {
-		"node": ">=22.13.0",
-		"pnpm": ">=11.3.0"
+		"node": ">=26.0.0",
+		"pnpm": ">=11.21.0"
 	},
 	"scripts": {
 		"dev": "vite",
@@ -41,28 +41,28 @@
 		"release:check-pushed-tags": "node scripts/check-pushed-tags.mjs"
 	},
 	"dependencies": {
-		"@tauri-apps/api": "^2.11.0",
-		"@tauri-apps/plugin-dialog": "^2.7.1",
-		"@tauri-apps/plugin-log": "^2.8.0",
-		"react": "^19.2.6",
-		"react-dom": "^19.2.6"
+		"@tauri-apps/api": "^2.11.1",
+		"@tauri-apps/plugin-dialog": "^2.7.2",
+		"@tauri-apps/plugin-log": "^2.9.0",
+		"react": "^19.2.8",
+		"react-dom": "^19.2.8"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.15",
-		"@tailwindcss/vite": "^4.3.0",
-		"@tauri-apps/cli": "^2.11.2",
-		"@types/node": "^22.19.19",
-		"@types/react": "^19.2.15",
-		"@types/react-dom": "^19.2.3",
-		"@vitejs/plugin-react": "^4.3.4",
+		"@biomejs/biome": "^2.5.8",
+		"@tailwindcss/vite": "^4.3.3",
+		"@tauri-apps/cli": "^2.11.4",
+		"@types/node": "^26.2.0",
+		"@types/react": "^19.2.18",
+		"@types/react-dom": "^19.2.4",
+		"@vitejs/plugin-react": "^4.7.0",
 		"cross-env": "^10.1.0",
-		"lefthook": "^2.1.8",
-		"npm-run-all2": "^8.0.4",
-		"tailwindcss": "^4.3.0",
+		"lefthook": "^2.1.10",
+		"npm-run-all2": "^9.0.3",
+		"tailwindcss": "^4.3.3",
 		"typescript": "^5.9.3",
-		"vite": "^6.4.2",
+		"vite": "^6.4.3",
 		"vite-tsconfig-paths": "^5.1.4",
-		"vitest": "^4.1.7"
+		"vitest": "^4.1.10"
 	},
-	"packageManager": "pnpm@11.3.0+sha512.2c403d6594527287672b1f7056343a1f7c3634036a67ffabfcc2b3d7595d843768f8787148d1b57cf7956c90606bbd192857c363af19e96d2d0ec9ec5741d215"
+	"packageManager": "pnpm@11.21.0+sha512.521705bce689924eac72f5a3587122f362689ef6571e55ba80076fd637c11132ecffada26fad4ea79c485bfddbfd3d5a2a5b05805a77e893de71ec8a6cca3bb1"
 }
