@@ -65,6 +65,10 @@ After `pnpm install`, lefthook installs git hooks; pre-commit formats staged fil
   - `APPLE_API_KEY` (key id)
   - `APPLE_API_ISSUER` (issuer id)
   - `APPLE_API_KEY_CONTENT` (raw `.p8` contents)
+- Automatic updates require encrypted GitHub secrets:
+  - `TAURI_SIGNING_PRIVATE_KEY`
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+  - The matching public key is intentionally committed in `src-tauri/tauri.conf.json`; never commit either private value.
 - Verification scripts used by release workflow:
   - `scripts/verify-release-macos.sh`
   - `scripts/verify-release-windows.ps1`

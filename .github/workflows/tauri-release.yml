@@ -65,6 +65,19 @@ jobs:
           RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: pnpm release:check-version
 
+      - name: Validate updater signing secrets
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required updater signing secret: $name"
+              exit 1
+            fi
+          done
+
       - name: Prepare Apple notarization API key file
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -120,6 +133,8 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           set +e
@@ -152,7 +167,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: tauri-macos-arm64
-          path: src-tauri/target/**/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/**/bundle/dmg/*.dmg
+            src-tauri/target/**/bundle/macos/*.app.tar.gz
+            src-tauri/target/**/bundle/macos/*.app.tar.gz.sig
           retention-days: 30
 
   release-windows:
@@ -182,12 +200,28 @@ jobs:
           RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: pnpm release:check-version
 
+      - name: Validate updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw "Missing required updater signing secret: TAURI_SIGNING_PRIVATE_KEY"
+          }
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+            throw "Missing required updater signing secret: TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          }
+
       - name: Bundle dependencies
         shell: pwsh
         run: ./scripts/bundle-dependencies-windows.ps1
 
       - name: Build Windows bundle
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --ci
 
       - name: Verify Windows installer
@@ -200,7 +234,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: tauri-windows-x64
-          path: src-tauri/target/**/bundle/nsis/*.exe
+          path: |
+            src-tauri/target/**/bundle/nsis/*.exe
+            src-tauri/target/**/bundle/nsis/*.exe.sig
           retention-days: 30
 
   release-linux:
@@ -238,6 +274,19 @@ jobs:
         env:
           RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: pnpm release:check-version
+
+      - name: Validate updater signing secrets
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required updater signing secret: $name"
+              exit 1
+            fi
+          done
 
       - name: Bundle dependencies
         run: ./scripts/bundle-dependencies-linux.sh
@@ -279,6 +328,8 @@ jobs:
       - name: Build Linux bundles
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target x86_64-unknown-linux-gnu --bundles "${LINUX_BUNDLES}" --ci --verbose
 
       - name: Verify Linux artifacts
@@ -290,6 +341,7 @@ jobs:
           name: tauri-linux-x64
           path: |
             src-tauri/target/**/bundle/appimage/*.AppImage
+            src-tauri/target/**/bundle/appimage/*.AppImage.sig
             src-tauri/target/**/bundle/deb/*.deb
             src-tauri/target/**/bundle/rpm/*.rpm
           retention-days: 30
@@ -299,10 +351,26 @@ jobs:
     needs: [release-macos, release-windows, release-linux]
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Download release artifacts
         uses: actions/download-artifact@v8
         with:
           path: release-artifacts
+
+      - name: Generate signed updater manifest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          node scripts/generate-updater-manifest.mjs \
+            --artifacts release-artifacts \
+            --repo "${REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --version "${RELEASE_TAG#v}" \
+            --output release-artifacts/latest.json
 
       - name: Create GitHub release and upload assets
         uses: softprops/action-gh-release@v2
@@ -314,8 +382,11 @@ jobs:
             release-artifacts/**/*.dmg
             release-artifacts/**/*.exe
             release-artifacts/**/*.AppImage
+            release-artifacts/**/*.app.tar.gz
+            release-artifacts/**/*.sig
             release-artifacts/**/*.deb
             release-artifacts/**/*.rpm
+            release-artifacts/latest.json
 
   trigger-website-deploy:
     if: startsWith(github.ref, 'refs/tags/v')

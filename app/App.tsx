@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import {
 	COOKIE_OVERRIDE_USE_DEFAULT,
 	COOKIE_SELECTION_STORAGE_KEY,
@@ -31,6 +32,10 @@ type DownloadStatus =
 	| "completed"
 	| "error";
 
+function isActiveDownloadStatus(status: DownloadStatus): boolean {
+	return status === "extracting" || status === "downloading";
+}
+
 function loadStoredCookieSelection(): CookieSelection {
 	try {
 		const raw = localStorage.getItem(COOKIE_SELECTION_STORAGE_KEY);
@@ -52,6 +57,8 @@ export default function App() {
 	]);
 	const [status, setStatus] = useState<DownloadStatus>("idle");
 	const statusRef = useRef<DownloadStatus>("idle");
+	const [isUpdateInstalling, setIsUpdateInstalling] = useState(false);
+	const isUpdateInstallingRef = useRef(false);
 	const [progress, setProgress] = useState(0);
 	const progressRef = useRef(0);
 	const [error, setError] = useState<string | null>(null);
@@ -77,6 +84,11 @@ export default function App() {
 	const setStatusSynced = useCallback((next: DownloadStatus) => {
 		statusRef.current = next;
 		setStatus(next);
+	}, []);
+
+	const setUpdateInstallingSynced = useCallback((isInstalling: boolean) => {
+		isUpdateInstallingRef.current = isInstalling;
+		setIsUpdateInstalling(isInstalling);
 	}, []);
 
 	const setProgressSynced = useCallback(
@@ -468,6 +480,13 @@ export default function App() {
 		}));
 
 	const handleChooseFile = async () => {
+		if (
+			isUpdateInstallingRef.current ||
+			isActiveDownloadStatus(statusRef.current)
+		) {
+			return;
+		}
+
 		try {
 			const result = await tauriAPI.showOpenDialog({
 				filters: [
@@ -498,6 +517,12 @@ export default function App() {
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
+		if (
+			isUpdateInstallingRef.current ||
+			isActiveDownloadStatus(statusRef.current)
+		) {
+			return;
+		}
 		if (!url.trim() && !localFile) return;
 		if (!localFile && !isInitialCookieSourceScanComplete) {
 			return;
@@ -714,9 +739,15 @@ export default function App() {
 		);
 	const isInitialCookieSourceScanComplete =
 		cookieSourcesInitialized && !cookieSourcesLoading;
+	const isDownloadActive = isActiveDownloadStatus(status);
+	const isUserInputLocked = isDownloadActive || isUpdateInstalling;
 
 	return (
 		<div className="min-h-screen bg-gray-50 py-4 sm:py-8">
+			<UpdatePrompt
+				isAppBusy={isDownloadActive}
+				onInstallStateChange={setUpdateInstallingSynced}
+			/>
 			<div className="max-w-4xl mx-auto px-4 sm:px-6">
 				<div className="mb-6 sm:mb-8">
 					<div className="text-center sm:text-left">
@@ -760,6 +791,7 @@ export default function App() {
 									}
 								}}
 								className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+								disabled={isUserInputLocked}
 							>
 								<option value="auto">Auto (recommended)</option>
 								{selectedGlobalManualSourceMissing && (
@@ -787,7 +819,7 @@ export default function App() {
 								onClick={() => {
 									void refreshCookieSources(true);
 								}}
-								disabled={cookieSourcesLoading || status === "downloading"}
+								disabled={cookieSourcesLoading || isUserInputLocked}
 								className="px-3 py-2 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
 							>
 								{cookieSourcesLoading ? "Refreshing..." : "Refresh Sources"}
@@ -819,11 +851,7 @@ export default function App() {
 								placeholder="https://www.youtube.com/watch?v=..."
 								className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
 								required={!localFile}
-								disabled={
-									status === "extracting" ||
-									status === "downloading" ||
-									!!localFile
-								}
+								disabled={isUserInputLocked || !!localFile}
 							/>
 						</div>
 
@@ -841,7 +869,7 @@ export default function App() {
 									onChange={(event) =>
 										setCookieSelectionOverride(event.target.value)
 									}
-									disabled={status === "extracting" || status === "downloading"}
+									disabled={isUserInputLocked}
 									className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
 								>
 									<option value={COOKIE_OVERRIDE_USE_DEFAULT}>
@@ -893,7 +921,7 @@ export default function App() {
 										type="button"
 										onClick={handleClearLocalFile}
 										className="text-blue-600 hover:text-blue-800 text-sm font-medium whitespace-nowrap"
-										disabled={status === "downloading"}
+										disabled={isUserInputLocked}
 									>
 										Change
 									</button>
@@ -902,7 +930,7 @@ export default function App() {
 								<button
 									type="button"
 									onClick={handleChooseFile}
-									disabled={status === "extracting" || status === "downloading"}
+									disabled={isUserInputLocked}
 									className="w-full py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
 								>
 									Choose Video File
@@ -918,7 +946,7 @@ export default function App() {
 								<button
 									type="button"
 									onClick={addSection}
-									disabled={status === "extracting" || status === "downloading"}
+									disabled={isUserInputLocked}
 									className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
 								>
 									+ Add Section
@@ -955,9 +983,7 @@ export default function App() {
 											autoComplete="off"
 											spellCheck={false}
 											className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-											disabled={
-												status === "extracting" || status === "downloading"
-											}
+											disabled={isUserInputLocked}
 											required={index > 0}
 										/>
 									</div>
@@ -988,9 +1014,7 @@ export default function App() {
 											autoComplete="off"
 											spellCheck={false}
 											className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-											disabled={
-												status === "extracting" || status === "downloading"
-											}
+											disabled={isUserInputLocked}
 											required={index < sections.length - 1}
 										/>
 									</div>
@@ -999,9 +1023,7 @@ export default function App() {
 										<button
 											type="button"
 											onClick={() => removeSection(index)}
-											disabled={
-												status === "extracting" || status === "downloading"
-											}
+											disabled={isUserInputLocked}
 											className="px-3 py-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
 											title="Remove section"
 										>
@@ -1016,8 +1038,7 @@ export default function App() {
 							<button
 								type="submit"
 								disabled={
-									status === "extracting" ||
-									status === "downloading" ||
+									isUserInputLocked ||
 									(!localFile && !isInitialCookieSourceScanComplete) ||
 									(!url.trim() && !localFile)
 								}

@@ -65,8 +65,17 @@ export function assertReleaseVersionsAligned() {
 	return uniqueVersions[0];
 }
 
+export function assertStableReleaseVersion(version) {
+	if (!/^\d+\.\d+\.\d+$/.test(version)) {
+		throw new Error(
+			`Stable releases require a major.minor.patch version; received ${version}`,
+		);
+	}
+}
+
 export function assertReleaseTagMatchesVersion(releaseTag, version) {
 	if (!releaseTag) return;
+	assertStableReleaseVersion(version);
 	const expectedTag = `v${version}`;
 	if (releaseTag !== expectedTag) {
 		console.error(
