@@ -1643,6 +1643,7 @@ class YouTubeDownloader:
             or normalized.startswith("h264")
             or normalized.startswith("hevc")
             or normalized.startswith("h265")
+            or normalized.startswith("prores")
         )
 
     @staticmethod
@@ -1662,8 +1663,8 @@ class YouTubeDownloader:
         source_video_codec: str | None = None,
         source_audio_codec: str | None = None,
     ) -> bool:
-        """Decide whether final .mp4 should be transcoded for QuickTime compatibility."""
-        if output_path.suffix.lower() != ".mp4":
+        """Decide whether final MP4/MOV should be transcoded for QuickTime compatibility."""
+        if output_path.suffix.lower() not in (".mp4", ".mov"):
             return False
 
         source_ext = source_path.suffix.lower()
@@ -1795,11 +1796,59 @@ class YouTubeDownloader:
             pass
 
     @staticmethod
-    def _temp_processing_extension(source_path: Path) -> str:
+    def _bounded_sections(
+        sections: list[tuple[int | None, int | None]] | None,
+    ) -> list[tuple[int | None, int | None]]:
+        """Discard empty UI placeholder sections that do not request a cut."""
+        return [
+            (start_time, end_time)
+            for start_time, end_time in (sections or [])
+            if start_time is not None or end_time is not None
+        ]
+
+    @staticmethod
+    def _temp_processing_extension(source_path: Path, output_path: Path | None = None) -> str:
+        """Choose an intermediate container compatible with the requested output."""
+        if output_path and output_path.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
+            return output_path.suffix.lower()
         ext = source_path.suffix.lower()
         if ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm"):
             return ext
         return ".mkv"
+
+    def _input_has_alpha(self, input_path: Path) -> bool:
+        """Detect whether any video stream has an alpha channel."""
+        ffprobe_path = self._resolve_ffprobe_path()
+        if not ffprobe_path:
+            return False
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe_path,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=pix_fmt",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    str(input_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+            if not isinstance(result.stdout, str):
+                return False
+            pixel_formats = result.stdout.lower().splitlines()
+            return any(
+                pixel_format.startswith(("yuva", "rgba", "bgra", "argb", "abgr", "gbrap"))
+                for pixel_format in pixel_formats
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
 
     def _remux_copy(self, input_path: Path, output_path: Path, output_format: str | None = None) -> bool:
         ffmpeg_path = self._resolve_ffmpeg_location_for_ytdlp()
@@ -1962,7 +2011,7 @@ class YouTubeDownloader:
             )
             return True, None
 
-        if target_ext == ".mp4":
+        if target_ext in (".mp4", ".mov"):
             source_video_codec, source_audio_codec = self._probe_primary_stream_codecs(source_path)
             force_compat_transcode = self._is_truthy_env("YT_DLP_ENABLE_MP4_COMPAT_TRANSCODE", default=False)
             requires_compat_transcode = force_compat_transcode or self._requires_mp4_compatibility_transcode(
@@ -1989,7 +2038,7 @@ class YouTubeDownloader:
                 self._emit_debug_event(
                     "quality_debug",
                     {
-                        "event": "mp4_compat_transcode",
+                        "event": "quicktime_compat_transcode",
                         "input_path": str(source_path),
                         "output_path": str(output_path),
                         "source_ext": source_ext,
@@ -2008,21 +2057,21 @@ class YouTubeDownloader:
                     "quality_debug",
                     {
                         "event": "output_normalized",
-                        "action": "transcode_mp4",
+                        "action": "transcode_quicktime",
                         "source_ext": source_ext,
                         "target_ext": target_ext,
                     },
                 )
                 return True, None
 
-            if source_ext == ".mp4":
+            if source_ext == target_ext:
                 try:
                     shutil.copy2(str(source_path), str(output_path))
                     self._emit_debug_event(
                         "quality_debug",
                         {
                             "event": "output_normalized",
-                            "action": "copy_mp4",
+                            "action": "copy_quicktime",
                             "source_ext": source_ext,
                             "target_ext": target_ext,
                         },
@@ -2031,13 +2080,14 @@ class YouTubeDownloader:
                 except (OSError, PermissionError) as e:
                     return False, f"Failed to copy file to requested location: {str(e)}"
 
-            if not self._remux_copy(source_path, output_path, output_format="mp4"):
-                return False, "Failed to remux downloaded file into MP4 container."
+            output_format = "mov" if target_ext == ".mov" else "mp4"
+            if not self._remux_copy(source_path, output_path, output_format=output_format):
+                return False, f"Failed to remux downloaded file into {target_ext.upper()} container."
             self._emit_debug_event(
                 "quality_debug",
                 {
                     "event": "output_normalized",
-                    "action": "remux_mp4",
+                    "action": "remux_quicktime",
                     "source_ext": source_ext,
                     "target_ext": target_ext,
                 },
@@ -2062,7 +2112,7 @@ class YouTubeDownloader:
 
         return (
             False,
-            f"Unsupported output format '{target_ext or '(none)'}'. Please save as .mp4, .mkv, or .webm.",
+            f"Unsupported output format '{target_ext or '(none)'}'. Please save as .mp4, .mkv, .webm, or .mov.",
         )
 
     def cut_video(
@@ -2122,10 +2172,17 @@ class YouTubeDownloader:
             cmd.extend(["-t", str(duration)])
 
         output_extension = Path(output_path).suffix.lower()
-        cmd.extend(["-map", "0:v:0?", "-map", "0:a:0?"])
+        has_alpha = self._input_has_alpha(input_path_obj)
+        if has_alpha and output_extension == ".mp4":
+            print("MP4 output cannot preserve video transparency; save as .mov, .mkv, or .webm", file=sys.stderr)
+            return False
+
+        # Preserve every intended video/audio/subtitle track rather than
+        # forcing the first stream of each type. This also supports audio-only
+        # inputs, which have no video stream to map.
+        cmd.extend(["-map", "0:v?", "-map", "0:a?", "-map", "0:s?"])
 
         if output_extension == ".webm":
-            cmd.extend(["-map", "0:s?"])
             cmd.extend(
                 [
                     "-c:v",
@@ -2134,6 +2191,8 @@ class YouTubeDownloader:
                     "30",
                     "-b:v",
                     "0",
+                    "-pix_fmt",
+                    "yuva420p" if has_alpha else "yuv420p",
                     "-c:a",
                     "libopus",
                     "-b:a",
@@ -2142,9 +2201,39 @@ class YouTubeDownloader:
                     "webvtt",
                 ]
             )
+        elif has_alpha and output_extension == ".mov":
+            cmd.extend(
+                [
+                    "-c:v",
+                    "prores_ks",
+                    "-profile:v",
+                    "4",
+                    "-pix_fmt",
+                    "yuva444p10le",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-c:s",
+                    "mov_text",
+                ]
+            )
+        elif has_alpha and output_extension == ".mkv":
+            cmd.extend(
+                [
+                    "-c:v",
+                    "ffv1",
+                    "-pix_fmt",
+                    "rgba",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-c:s",
+                    "copy",
+                ]
+            )
         else:
-            if output_extension in (".mkv", ".mp4", ".m4v", ".mov"):
-                cmd.extend(["-map", "0:s?"])
             cmd.extend(
                 [
                     "-c:v",
@@ -2154,7 +2243,7 @@ class YouTubeDownloader:
                     "-crf",
                     "18",
                     "-vf",
-                    "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                    "pad=ceil(iw/2)*2:ceil(ih/2)*2:color=black@0",
                     "-pix_fmt",
                     "yuv420p",
                     "-c:a",
@@ -2239,7 +2328,7 @@ class YouTubeDownloader:
         temp_dir = self._get_temp_dir()
         section_files: list[Path] = []
         concat_file: Path | None = None
-        section_ext = (temp_extension or Path(input_path).suffix or ".mkv").strip()
+        section_ext = (temp_extension or Path(output_path).suffix or Path(input_path).suffix or ".mkv").strip()
         if not section_ext.startswith("."):
             section_ext = f".{section_ext}"
 
@@ -2390,11 +2479,7 @@ class YouTubeDownloader:
         # A blank initial UI section serializes as [(None, None)]. It is not a
         # requested cut, so leave the download lossless and avoid a needless
         # full-video transcode.
-        bounded_sections = [
-            (section_start, section_end)
-            for section_start, section_end in (sections or [])
-            if section_start is not None or section_end is not None
-        ]
+        bounded_sections = self._bounded_sections(sections)
 
         # Check if we need to cut the video. Use non-blank sections if
         # provided, otherwise fall back to the legacy single start/end pair.
@@ -2918,7 +3003,7 @@ class YouTubeDownloader:
                     video_info=video_info,
                 )
 
-            cut_ext = self._temp_processing_extension(original_file_path)
+            cut_ext = self._temp_processing_extension(original_file_path, output_path_obj)
             temp_processing_file = temp_dir / f"{cache_video_id}_section_work{cut_ext}"
             self._safe_unlink(temp_processing_file)
 
@@ -2976,7 +3061,10 @@ class YouTubeDownloader:
             normalized, normalize_error = self._normalize_output_file(
                 processing_source,
                 output_path_obj,
-                progress_tracker.selected_format,
+                # Section output has been re-encoded for the requested target
+                # container. Its probe is authoritative; the original yt-dlp
+                # selection would otherwise force a needless second transcode.
+                None if needs_cut else progress_tracker.selected_format,
             )
             final_path_obj = output_path_obj
 
@@ -3144,7 +3232,9 @@ def main():
                     parsed_sections = json.loads(sections_json)
                     if not isinstance(parsed_sections, list):
                         raise ValueError("Invalid sections format: empty list or not a list")
-                    sections = [parse_section_times(section) for section in parsed_sections]
+                    sections = downloader._bounded_sections(
+                        [parse_section_times(section) for section in parsed_sections]
+                    )
                 except (json.JSONDecodeError, ValueError, TypeError) as e:
                     sys.stdout.write(
                         json.dumps(
@@ -3181,7 +3271,7 @@ def main():
                     try:
                         if sections:
                             video_id = "local_video"
-                            temp_ext = downloader._temp_processing_extension(source_path)
+                            temp_ext = downloader._temp_processing_extension(source_path, output_path_obj)
                             temp_processing_file = downloader._get_temp_dir() / f"{video_id}_section_work{temp_ext}"
                             downloader._safe_unlink(temp_processing_file)
                             success = downloader.cut_and_concatenate_sections(
@@ -3189,7 +3279,6 @@ def main():
                                 sections,
                                 str(temp_processing_file),
                                 video_id,
-                                temp_extension=temp_ext,
                             )
                             if not success:
                                 error_message = "Failed to cut and concatenate sections"

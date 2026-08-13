@@ -94,7 +94,7 @@ export const tauriAPI = {
 		const filePath = await save({
 			defaultPath,
 			filters: [
-				{ name: "Video Files", extensions: ["mp4", "webm", "mkv"] },
+				{ name: "Video Files", extensions: ["mp4", "webm", "mkv", "mov"] },
 				{ name: "All Files", extensions: ["*"] },
 			],
 		});
