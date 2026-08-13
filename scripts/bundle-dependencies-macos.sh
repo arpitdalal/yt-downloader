@@ -106,12 +106,12 @@ echo "OK: JS runtime bundled at $JSRUNTIME_DIR"
 printf '\n=== Step 3: FFmpeg ===\n'
 case "$PYTHON_ARCH" in
   arm64 | aarch64)
-    FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1766430132_8.0.1/ffmpeg.zip"
-    FFMPEG_SHA256="c56f4e2b2ce26a61becf890d8da3415347a1d7d4418cb514915f21612358b790"
+    FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1785863997_9.0/ffmpeg.zip"
+    FFMPEG_SHA256="5267ef149ee0d208057a1b316aac079b661b0476574dee5da7d225769773c603"
     ;;
   x86_64)
-    FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1766437297_8.0.1/ffmpeg.zip"
-    FFMPEG_SHA256="a6c41c69e829697e408308f1ecd6acdfd0d0a84973ff3a6bf782beba83885ed6"
+    FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1785871427_9.0/ffmpeg.zip"
+    FFMPEG_SHA256="79d14663d8b078dbbc38de18d63a30f8a5bfc860af5dfee7f8cf3e387cf1c02c"
     ;;
   *)
     echo "Unsupported macOS architecture for bundled FFmpeg: $PYTHON_ARCH"
