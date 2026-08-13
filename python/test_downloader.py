@@ -6,6 +6,7 @@ Covers all methods, edge cases, and error scenarios
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -1146,7 +1147,6 @@ class TestCutVideo:
         result = downloader.cut_video(str(input_file), str(output_file), start_time=10)
 
         assert result is True
-        mock_subprocess_run.assert_called_once()
         cmd = mock_subprocess_run.call_args[0][0]
         assert "-ss" in cmd
         assert "10" in cmd
@@ -1179,6 +1179,284 @@ class TestCutVideo:
         assert "-ss" in cmd
         assert "-t" in cmd
         assert "20" in cmd  # duration = end - start
+
+    def test_cut_video_decodes_before_seeking_to_honor_start_time(self, temp_dir, mock_subprocess_run):
+        """A non-keyframe start must be accurate, so stream copying is unsafe."""
+        input_file = temp_dir / "input.mp4"
+        input_file.write_bytes(b"video data")
+        output_file = temp_dir / "output.mp4"
+
+        downloader = YouTubeDownloader()
+        assert downloader.cut_video(str(input_file), str(output_file), start_time=5, end_time=8)
+
+        cmd = mock_subprocess_run.call_args.args[0]
+        assert cmd.index("-ss") < cmd.index("-i")
+        assert cmd[cmd.index("-i") + 1] == str(input_file)
+        assert "copy" not in cmd
+        assert cmd[cmd.index("-c:v") + 1] == "libx264"
+        assert cmd[cmd.index("-map") + 1] == "0:v?"
+        assert "pad=ceil(iw/2)*2:ceil(ih/2)*2:color=black@0" in cmd
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+    def test_cut_video_honors_non_keyframe_start_time(self, temp_dir, monkeypatch):
+        """Regression test for cuts that previously began at the prior keyframe."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        assert ffmpeg_path is not None
+        input_file = temp_dir / "input.mp4"
+        output_file = temp_dir / "output.mp4"
+
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:size=64x64:rate=5:duration=5",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=green:size=64x64:rate=5:duration=5",
+                "-filter_complex",
+                "[0:v][1:v]concat=n=2:v=1:a=0",
+                "-c:v",
+                "libx264",
+                "-g",
+                "50",
+                "-keyint_min",
+                "50",
+                "-sc_threshold",
+                "0",
+                str(input_file),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        monkeypatch.setenv("FFMPEG_PATH", ffmpeg_path)
+
+        assert YouTubeDownloader().cut_video(str(input_file), str(output_file), start_time=5, end_time=8)
+
+        first_pixel = subprocess.run(
+            [
+                ffmpeg_path,
+                "-i",
+                str(output_file),
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+        ).stdout[:3]
+        assert first_pixel[1] > first_pixel[0], "cut should start on the green five-second frame"
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+    def test_cut_video_preserves_mkv_subtitles_and_supports_audio_only_input(self, temp_dir, monkeypatch):
+        """Cuts retain compatible subtitles and do not require a video stream."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        ffprobe_path = shutil.which("ffprobe")
+        assert ffmpeg_path is not None
+        if ffprobe_path is None:
+            pytest.skip("ffprobe is required to verify subtitle preservation")
+        subtitle_file = temp_dir / "subtitle.srt"
+        subtitle_file.write_text("1\n00:00:00,000 --> 00:00:02,000\nCaption\n", encoding="utf-8")
+        video_input = temp_dir / "input.mkv"
+        video_output = temp_dir / "output.mkv"
+        audio_input = temp_dir / "input.m4a"
+        audio_output = temp_dir / "output.m4a"
+
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=blue:size=64x64:rate=5:duration=3",
+                "-i",
+                str(subtitle_file),
+                "-map",
+                "0:v",
+                "-map",
+                "1:s",
+                "-c:v",
+                "libx264",
+                "-c:s",
+                "srt",
+                str(video_input),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:duration=3",
+                "-c:a",
+                "aac",
+                str(audio_input),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        monkeypatch.setenv("FFMPEG_PATH", ffmpeg_path)
+        downloader = YouTubeDownloader()
+
+        assert downloader.cut_video(str(video_input), str(video_output), start_time=1, end_time=2)
+        assert downloader.cut_video(str(audio_input), str(audio_output), start_time=1, end_time=2)
+
+        subtitle_codecs = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-select_streams",
+                "s",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=nw=1:nk=1",
+                str(video_output),
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout
+        assert "subrip" in subtitle_codecs
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+    def test_cut_video_pads_odd_video_dimensions(self, temp_dir, monkeypatch):
+        """H.264 cuts should work for valid sources with odd dimensions."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        assert ffmpeg_path is not None
+        input_file = temp_dir / "input.mkv"
+        output_file = temp_dir / "output.mp4"
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=yellow:size=65x65:rate=5:duration=3",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv444p",
+                str(input_file),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        monkeypatch.setenv("FFMPEG_PATH", ffmpeg_path)
+
+        assert YouTubeDownloader().cut_video(str(input_file), str(output_file), start_time=1, end_time=2)
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+    def test_cut_video_preserves_alpha_in_mov_output(self, temp_dir, monkeypatch):
+        """Transparency is retained for a container and codec that support it."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        ffprobe_path = shutil.which("ffprobe")
+        assert ffmpeg_path is not None
+        if ffprobe_path is None:
+            pytest.skip("ffprobe is required to verify alpha preservation")
+        input_file = temp_dir / "input.mov"
+        output_file = temp_dir / "output.mov"
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red@0.5:size=64x64:rate=5:duration=3",
+                "-vf",
+                "format=rgba",
+                "-c:v",
+                "qtrle",
+                "-pix_fmt",
+                "argb",
+                str(input_file),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        monkeypatch.setenv("FFMPEG_PATH", ffmpeg_path)
+
+        assert YouTubeDownloader().cut_video(str(input_file), str(output_file), start_time=1, end_time=2)
+
+        pixel_format = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=pix_fmt",
+                "-of",
+                "default=nw=1:nk=1",
+                str(output_file),
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        assert pixel_format.startswith("yuva")
+
+    def test_temp_processing_extension_prefers_requested_output_format(self):
+        """A target-compatible intermediate prevents a second final transcode."""
+        assert YouTubeDownloader._temp_processing_extension(Path("source.webm"), Path("output.mp4")) == ".mp4"
+        assert YouTubeDownloader._temp_processing_extension(Path("source.mkv"), Path("output.webm")) == ".webm"
+        assert YouTubeDownloader._temp_processing_extension(Path("source.mp4"), Path("output.mkv")) == ".mkv"
+
+    def test_input_has_alpha_checks_every_video_stream(self, temp_dir):
+        """A non-primary alpha stream must not be silently converted as opaque."""
+        downloader = YouTubeDownloader()
+        input_file = temp_dir / "input.mkv"
+        input_file.write_bytes(b"video data")
+        with patch.object(downloader, "_resolve_ffprobe_path", return_value="ffprobe"):
+            with patch("downloader.subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='{"streams": [{"pix_fmt": "yuv420p"}, {"pix_fmt": "yuva420p"}]}',
+                )
+                assert downloader._input_has_alpha(input_file)
+                assert "v" in mock_run.call_args.args[0]
+
+    def test_input_has_alpha_detects_webm_alpha_metadata(self, temp_dir):
+        """WebM transparency can be stored in alpha_mode rather than pix_fmt."""
+        downloader = YouTubeDownloader()
+        input_file = temp_dir / "input.webm"
+        input_file.write_bytes(b"video data")
+        with patch.object(downloader, "_resolve_ffprobe_path", return_value="ffprobe"):
+            with patch("downloader.subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='{"streams": [{"pix_fmt": "yuv420p", "tags": {"alpha_mode": "1"}}]}',
+                )
+                assert downloader._input_has_alpha(input_file)
+
+    def test_text_subtitle_map_args_excludes_bitmap_subtitles(self, temp_dir):
+        """Text-only containers must not receive PGS/VobSub subtitle mappings."""
+        downloader = YouTubeDownloader()
+        input_file = temp_dir / "input.mkv"
+        input_file.write_bytes(b"video data")
+        with patch.object(downloader, "_resolve_ffprobe_path", return_value="ffprobe"):
+            with patch("downloader.subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='{"streams": [{"codec_name": "hdmv_pgs_subtitle"}, {"codec_name": "subrip"}]}',
+                )
+                assert downloader._text_subtitle_map_args(input_file, ".mp4") == ["-map", "0:s:1?"]
 
     def test_cut_video_invalid_input(self, temp_dir):
         """Test cutting with non-existent input file"""
@@ -1491,6 +1769,45 @@ class TestDownloadVideo:
                                 assert result.success is True
                                 assert result.file_path == str(output_file)
 
+    def test_download_ignores_blank_section(self, temp_dir, mock_ytdlp_download, sample_video_info):
+        """The default empty UI section must not trigger a full-video cut."""
+        output_file = temp_dir / "output.mp4"
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.mp4"
+        downloaded_file.write_bytes(b"video data")
+        downloader = YouTubeDownloader()
+
+        with patch.object(
+            downloader,
+            "extract_video_info",
+            return_value=VideoInfo(
+                id=sample_video_info["id"],
+                title=sample_video_info["title"],
+                duration=sample_video_info["duration"],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None,
+            ),
+        ):
+            with patch.object(downloader, "_get_temp_dir", return_value=temp_dir):
+                with patch.object(downloader, "_get_cached_video_path", return_value=None):
+                    with patch.object(downloader, "_find_downloaded_file", return_value=downloaded_file):
+                        with patch.object(downloader, "_check_file_stability", return_value=True):
+                            with patch.object(downloader, "cut_and_concatenate_sections") as mock_cut:
+                                with patch("downloader.shutil.copy2") as mock_copy:
+                                    mock_copy.side_effect = lambda _src, dst: Path(dst).write_bytes(b"copied data")
+                                    result = downloader.download_video(
+                                        "https://youtube.com/watch?v=test",
+                                        str(output_file),
+                                        sections=[(None, None)],
+                                    )
+
+        assert result.success is True
+        mock_cut.assert_not_called()
+
     def test_download_single_section(self, temp_dir, mock_ytdlp_download, sample_video_info):
         """Test downloading and cutting single section"""
         output_file = temp_dir / "output.mp4"
@@ -1523,25 +1840,32 @@ class TestDownloadVideo:
                     ):
                         with patch.object(downloader, "_check_file_stability", return_value=True):
                             with patch.object(downloader, "cut_video", return_value=True) as mock_cut:
+                                with patch.object(downloader, "_normalize_output_file") as mock_normalize:
 
-                                def cut_side_effect(
-                                    input_path,
-                                    output_path,
-                                    start_time=None,
-                                    end_time=None,
-                                ):
-                                    Path(output_path).write_bytes(b"cut data")
-                                    return True
+                                    def cut_side_effect(
+                                        input_path,
+                                        output_path,
+                                        start_time=None,
+                                        end_time=None,
+                                    ):
+                                        Path(output_path).write_bytes(b"cut data")
+                                        return True
 
-                                mock_cut.side_effect = cut_side_effect
-                                result = downloader.download_video(
-                                    "https://youtube.com/watch?v=test",
-                                    str(output_file),
-                                    start_time=10,
-                                    end_time=30,
-                                )
-                                assert result.success is True
-                                assert result.file_path == str(output_file)
+                                    def normalize_side_effect(_source, destination, _selected_format):
+                                        Path(destination).write_bytes(b"final data")
+                                        return True, None
+
+                                    mock_cut.side_effect = cut_side_effect
+                                    mock_normalize.side_effect = normalize_side_effect
+                                    result = downloader.download_video(
+                                        "https://youtube.com/watch?v=test",
+                                        str(output_file),
+                                        start_time=10,
+                                        end_time=30,
+                                    )
+                                    assert result.success is True
+                                    assert result.file_path == str(output_file)
+                                    assert mock_normalize.call_args.args[2] is None
 
     def test_download_multiple_sections(self, temp_dir, mock_ytdlp_download, sample_video_info):
         """Test downloading and cutting multiple sections"""
@@ -2869,6 +3193,29 @@ class TestDownloadVideo:
             is False
         )
 
+    def test_requires_mp4_compatibility_transcode_rejects_prores_for_mp4(self):
+        """ProRes is valid in MOV but must not be remuxed into MP4."""
+        assert (
+            YouTubeDownloader._requires_mp4_compatibility_transcode(
+                Path("source.mov"),
+                Path("output.mp4"),
+                None,
+                source_video_codec="prores",
+                source_audio_codec="aac",
+            )
+            is True
+        )
+        assert (
+            YouTubeDownloader._requires_mp4_compatibility_transcode(
+                Path("source.mov"),
+                Path("output.mov"),
+                None,
+                source_video_codec="prores",
+                source_audio_codec="aac",
+            )
+            is False
+        )
+
     def test_normalize_output_file_rejects_incompatible_webm_codecs(self, temp_dir):
         downloader = YouTubeDownloader()
         source = temp_dir / "source.mp4"
@@ -3822,27 +4169,29 @@ class TestMainFunction:
 
         with patch(
             "sys.argv",
-            ["downloader.py", "--local", str(input_file), "[]", str(output_file)],
+            ["downloader.py", "--local", str(input_file), '[{"start": null, "end": null}]', str(output_file)],
         ):
             with patch.object(
                 YouTubeDownloader,
                 "_normalize_output_file",
                 return_value=(True, None),
             ) as mock_normalize:
-                from downloader import main
+                with patch.object(YouTubeDownloader, "cut_and_concatenate_sections") as mock_cut:
+                    from downloader import main
 
-                with pytest.raises(SystemExit) as exc_info:
-                    main()
-                assert exc_info.value.code == 0
-                mock_normalize.assert_called_once()
-                called_src, called_dst = mock_normalize.call_args.args
-                assert called_src == input_file
-                assert called_dst == output_file
-                assert mock_normalize.call_args.kwargs.get("selected_format") is None
+                    with pytest.raises(SystemExit) as exc_info:
+                        main()
+                    assert exc_info.value.code == 0
+                    mock_cut.assert_not_called()
+                    mock_normalize.assert_called_once()
+                    called_src, called_dst = mock_normalize.call_args.args
+                    assert called_src == input_file
+                    assert called_dst == output_file
+                    assert mock_normalize.call_args.kwargs.get("selected_format") is None
 
-                captured = capsys.readouterr()
-                output = json.loads(captured.out)
-                assert output["success"] is True
+                    captured = capsys.readouterr()
+                    output = json.loads(captured.out)
+                    assert output["success"] is True
 
     def test_main_download_mode_invalid_sections_json(self, temp_dir, capsys):
         """Test download mode with malformed sections JSON"""
