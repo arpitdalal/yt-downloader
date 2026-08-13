@@ -2096,13 +2096,15 @@ class YouTubeDownloader:
             )
             return False
 
-        cmd = [ffmpeg_path]
+        # Stream-copying can only seek to a preceding keyframe. A section that
+        # starts between keyframes can therefore include the beginning of the
+        # source video, which makes the requested start time ineffective.
+        # Decode before seeking and encode the result so section boundaries are
+        # frame-accurate.
+        cmd = [ffmpeg_path, "-i", str(input_path)]
 
-        # When using -c copy, -ss must be before -i for accurate seeking
         if start_time is not None:
             cmd.extend(["-ss", str(start_time)])
-
-        cmd.extend(["-i", str(input_path), "-c", "copy"])
 
         if end_time is not None:
             # Calculate duration: if start_time is None, duration is just end_time
@@ -2119,7 +2121,42 @@ class YouTubeDownloader:
                 return False
             cmd.extend(["-t", str(duration)])
 
-        cmd.extend(["-avoid_negative_ts", "make_zero", str(output_path), "-y"])
+        cmd.extend(["-map", "0:v:0", "-map", "0:a?"])
+
+        if Path(output_path).suffix.lower() == ".webm":
+            cmd.extend(
+                [
+                    "-c:v",
+                    "libvpx-vp9",
+                    "-crf",
+                    "30",
+                    "-b:v",
+                    "0",
+                    "-c:a",
+                    "libopus",
+                    "-b:a",
+                    "192k",
+                ]
+            )
+        else:
+            cmd.extend(
+                [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "medium",
+                    "-crf",
+                    "18",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                ]
+            )
+
+        cmd.extend([str(output_path), "-y"])
 
         try:
             subprocess.run(

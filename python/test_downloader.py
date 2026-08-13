@@ -6,6 +6,7 @@ Covers all methods, edge cases, and error scenarios
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -1179,6 +1180,78 @@ class TestCutVideo:
         assert "-ss" in cmd
         assert "-t" in cmd
         assert "20" in cmd  # duration = end - start
+
+    def test_cut_video_decodes_before_seeking_to_honor_start_time(self, temp_dir, mock_subprocess_run):
+        """A non-keyframe start must be accurate, so stream copying is unsafe."""
+        input_file = temp_dir / "input.mp4"
+        input_file.write_bytes(b"video data")
+        output_file = temp_dir / "output.mp4"
+
+        downloader = YouTubeDownloader()
+        assert downloader.cut_video(str(input_file), str(output_file), start_time=5, end_time=8)
+
+        cmd = mock_subprocess_run.call_args.args[0]
+        assert cmd.index("-i") < cmd.index("-ss")
+        assert cmd[cmd.index("-i") + 1] == str(input_file)
+        assert "copy" not in cmd
+        assert cmd[cmd.index("-c:v") + 1] == "libx264"
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+    def test_cut_video_honors_non_keyframe_start_time(self, temp_dir, monkeypatch):
+        """Regression test for cuts that previously began at the prior keyframe."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        assert ffmpeg_path is not None
+        input_file = temp_dir / "input.mp4"
+        output_file = temp_dir / "output.mp4"
+
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:size=64x64:rate=5:duration=5",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=green:size=64x64:rate=5:duration=5",
+                "-filter_complex",
+                "[0:v][1:v]concat=n=2:v=1:a=0",
+                "-c:v",
+                "libx264",
+                "-g",
+                "50",
+                "-keyint_min",
+                "50",
+                "-sc_threshold",
+                "0",
+                str(input_file),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        monkeypatch.setenv("FFMPEG_PATH", ffmpeg_path)
+
+        assert YouTubeDownloader().cut_video(str(input_file), str(output_file), start_time=5, end_time=8)
+
+        first_pixel = subprocess.run(
+            [
+                ffmpeg_path,
+                "-i",
+                str(output_file),
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+        ).stdout[:3]
+        assert first_pixel[1] > first_pixel[0], "cut should start on the green five-second frame"
 
     def test_cut_video_invalid_input(self, temp_dir):
         """Test cutting with non-existent input file"""
