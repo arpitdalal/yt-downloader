@@ -9,8 +9,8 @@
 		"preview": "astro preview"
 	},
 	"devDependencies": {
-		"@tailwindcss/vite": "^4.3.0",
-		"astro": "^5.18.1",
-		"tailwindcss": "^4.3.0"
+		"@tailwindcss/vite": "^4.3.3",
+		"astro": "^5.18.2",
+		"tailwindcss": "^4.3.3"
 	}
 }

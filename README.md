@@ -20,8 +20,8 @@ Desktop app (Tauri v2 + React + Python yt-dlp) for downloading YouTube videos or
 
 ## Prerequisites
 
-- Node.js 22.13+
-- pnpm
+- Node.js 26+
+- pnpm 11.21.0 (`npm install --global pnpm@11.21.0`; Node 26 does not ship Corepack)
 - Rust toolchain (cargo/rustc)
 - Python 3.11+
 - FFmpeg (for development)
@@ -29,6 +29,7 @@ Desktop app (Tauri v2 + React + Python yt-dlp) for downloading YouTube videos or
 ## Local Setup
 
 ```bash
+npm install --global pnpm@11.21.0
 pnpm install
 pnpm python:install
 ```
