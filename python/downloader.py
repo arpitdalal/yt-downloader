@@ -2096,15 +2096,15 @@ class YouTubeDownloader:
             )
             return False
 
-        # Stream-copying can only seek to a preceding keyframe. A section that
-        # starts between keyframes can therefore include the beginning of the
-        # source video, which makes the requested start time ineffective.
-        # Decode before seeking and encode the result so section boundaries are
-        # frame-accurate.
-        cmd = [ffmpeg_path, "-i", str(input_path)]
-
+        # Stream-copying can only seek to a preceding keyframe. Re-encoding
+        # lets FFmpeg decode from that keyframe through the requested start,
+        # producing frame-accurate section boundaries while retaining fast
+        # input seeking for late sections.
+        cmd = [ffmpeg_path]
         if start_time is not None:
             cmd.extend(["-ss", str(start_time)])
+
+        cmd.extend(["-i", str(input_path)])
 
         if end_time is not None:
             # Calculate duration: if start_time is None, duration is just end_time
@@ -2121,9 +2121,11 @@ class YouTubeDownloader:
                 return False
             cmd.extend(["-t", str(duration)])
 
-        cmd.extend(["-map", "0:v:0", "-map", "0:a?"])
+        output_extension = Path(output_path).suffix.lower()
+        cmd.extend(["-map", "0:v:0?", "-map", "0:a:0?"])
 
-        if Path(output_path).suffix.lower() == ".webm":
+        if output_extension == ".webm":
+            cmd.extend(["-map", "0:s?"])
             cmd.extend(
                 [
                     "-c:v",
@@ -2136,9 +2138,13 @@ class YouTubeDownloader:
                     "libopus",
                     "-b:a",
                     "192k",
+                    "-c:s",
+                    "webvtt",
                 ]
             )
         else:
+            if output_extension in (".mkv", ".mp4", ".m4v", ".mov"):
+                cmd.extend(["-map", "0:s?"])
             cmd.extend(
                 [
                     "-c:v",
@@ -2147,6 +2153,8 @@ class YouTubeDownloader:
                     "medium",
                     "-crf",
                     "18",
+                    "-vf",
+                    "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                     "-pix_fmt",
                     "yuv420p",
                     "-c:a",
@@ -2155,6 +2163,10 @@ class YouTubeDownloader:
                     "192k",
                 ]
             )
+            if output_extension == ".mkv":
+                cmd.extend(["-c:s", "copy"])
+            elif output_extension in (".mp4", ".m4v", ".mov"):
+                cmd.extend(["-c:s", "mov_text"])
 
         cmd.extend([str(output_path), "-y"])
 
@@ -2375,9 +2387,18 @@ class YouTubeDownloader:
                 video_info=video_info,
             )
 
-        # Check if we need to cut the video
-        # Use sections if provided, otherwise fall back to single start/end time
-        if sections and len(sections) > 0:
+        # A blank initial UI section serializes as [(None, None)]. It is not a
+        # requested cut, so leave the download lossless and avoid a needless
+        # full-video transcode.
+        bounded_sections = [
+            (section_start, section_end)
+            for section_start, section_end in (sections or [])
+            if section_start is not None or section_end is not None
+        ]
+
+        # Check if we need to cut the video. Use non-blank sections if
+        # provided, otherwise fall back to the legacy single start/end pair.
+        if bounded_sections:
             needs_cut = True
             use_sections = True
         else:
@@ -2904,7 +2925,7 @@ class YouTubeDownloader:
             if use_sections:
                 if not self.cut_and_concatenate_sections(
                     str(original_file_path),
-                    sections or [],
+                    bounded_sections,
                     str(temp_processing_file),
                     video_info.id,
                 ):

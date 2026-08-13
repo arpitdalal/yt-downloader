@@ -1191,10 +1191,12 @@ class TestCutVideo:
         assert downloader.cut_video(str(input_file), str(output_file), start_time=5, end_time=8)
 
         cmd = mock_subprocess_run.call_args.args[0]
-        assert cmd.index("-i") < cmd.index("-ss")
+        assert cmd.index("-ss") < cmd.index("-i")
         assert cmd[cmd.index("-i") + 1] == str(input_file)
         assert "copy" not in cmd
         assert cmd[cmd.index("-c:v") + 1] == "libx264"
+        assert cmd[cmd.index("-map") + 1] == "0:v:0?"
+        assert "pad=ceil(iw/2)*2:ceil(ih/2)*2" in cmd
 
     @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
     def test_cut_video_honors_non_keyframe_start_time(self, temp_dir, monkeypatch):
@@ -1252,6 +1254,112 @@ class TestCutVideo:
             check=True,
         ).stdout[:3]
         assert first_pixel[1] > first_pixel[0], "cut should start on the green five-second frame"
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+    def test_cut_video_preserves_mkv_subtitles_and_supports_audio_only_input(self, temp_dir, monkeypatch):
+        """Cuts retain compatible subtitles and do not require a video stream."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        ffprobe_path = shutil.which("ffprobe")
+        assert ffmpeg_path is not None
+        if ffprobe_path is None:
+            pytest.skip("ffprobe is required to verify subtitle preservation")
+        subtitle_file = temp_dir / "subtitle.srt"
+        subtitle_file.write_text("1\n00:00:00,000 --> 00:00:02,000\nCaption\n", encoding="utf-8")
+        video_input = temp_dir / "input.mkv"
+        video_output = temp_dir / "output.mkv"
+        audio_input = temp_dir / "input.m4a"
+        audio_output = temp_dir / "output.m4a"
+
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=blue:size=64x64:rate=5:duration=3",
+                "-i",
+                str(subtitle_file),
+                "-map",
+                "0:v",
+                "-map",
+                "1:s",
+                "-c:v",
+                "libx264",
+                "-c:s",
+                "srt",
+                str(video_input),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:duration=3",
+                "-c:a",
+                "aac",
+                str(audio_input),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        monkeypatch.setenv("FFMPEG_PATH", ffmpeg_path)
+        downloader = YouTubeDownloader()
+
+        assert downloader.cut_video(str(video_input), str(video_output), start_time=1, end_time=2)
+        assert downloader.cut_video(str(audio_input), str(audio_output), start_time=1, end_time=2)
+
+        subtitle_codecs = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-select_streams",
+                "s",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=nw=1:nk=1",
+                str(video_output),
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout
+        assert "subrip" in subtitle_codecs
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+    def test_cut_video_pads_odd_video_dimensions(self, temp_dir, monkeypatch):
+        """H.264 cuts should work for valid sources with odd dimensions."""
+        ffmpeg_path = shutil.which("ffmpeg")
+        assert ffmpeg_path is not None
+        input_file = temp_dir / "input.mkv"
+        output_file = temp_dir / "output.mp4"
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=yellow:size=65x65:rate=5:duration=3",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv444p",
+                str(input_file),
+                "-y",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        monkeypatch.setenv("FFMPEG_PATH", ffmpeg_path)
+
+        assert YouTubeDownloader().cut_video(str(input_file), str(output_file), start_time=1, end_time=2)
 
     def test_cut_video_invalid_input(self, temp_dir):
         """Test cutting with non-existent input file"""
@@ -1563,6 +1671,45 @@ class TestDownloadVideo:
                                 result = downloader.download_video("https://youtube.com/watch?v=test", str(output_file))
                                 assert result.success is True
                                 assert result.file_path == str(output_file)
+
+    def test_download_ignores_blank_section(self, temp_dir, mock_ytdlp_download, sample_video_info):
+        """The default empty UI section must not trigger a full-video cut."""
+        output_file = temp_dir / "output.mp4"
+        downloaded_file = temp_dir / f"{sample_video_info['id']}.mp4"
+        downloaded_file.write_bytes(b"video data")
+        downloader = YouTubeDownloader()
+
+        with patch.object(
+            downloader,
+            "extract_video_info",
+            return_value=VideoInfo(
+                id=sample_video_info["id"],
+                title=sample_video_info["title"],
+                duration=sample_video_info["duration"],
+                is_live=False,
+                is_scheduled=False,
+                scheduled_start_time=None,
+                thumbnail=None,
+                uploader=None,
+                view_count=None,
+                upload_date=None,
+            ),
+        ):
+            with patch.object(downloader, "_get_temp_dir", return_value=temp_dir):
+                with patch.object(downloader, "_get_cached_video_path", return_value=None):
+                    with patch.object(downloader, "_find_downloaded_file", return_value=downloaded_file):
+                        with patch.object(downloader, "_check_file_stability", return_value=True):
+                            with patch.object(downloader, "cut_and_concatenate_sections") as mock_cut:
+                                with patch("downloader.shutil.copy2") as mock_copy:
+                                    mock_copy.side_effect = lambda _src, dst: Path(dst).write_bytes(b"copied data")
+                                    result = downloader.download_video(
+                                        "https://youtube.com/watch?v=test",
+                                        str(output_file),
+                                        sections=[(None, None)],
+                                    )
+
+        assert result.success is True
+        mock_cut.assert_not_called()
 
     def test_download_single_section(self, temp_dir, mock_ytdlp_download, sample_video_info):
         """Test downloading and cutting single section"""
