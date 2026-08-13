@@ -1,6 +1,7 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertStableReleaseVersion } from "./release-version-lib.mjs";
 
 const PLATFORM_ARTIFACTS = [
 	{
@@ -43,11 +44,9 @@ function validateReleaseInput({ repo, tag, version }) {
 	if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
 		throw new Error(`Invalid GitHub repository: ${repo}`);
 	}
-	if (!/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
+	assertStableReleaseVersion(version);
+	if (tag !== `v${version}`) {
 		throw new Error(`Invalid release tag: ${tag}`);
-	}
-	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-		throw new Error(`Invalid release version: ${version}`);
 	}
 }
 
@@ -64,6 +63,10 @@ export async function generateUpdaterManifest({
 
 	for (const platform of PLATFORM_ARTIFACTS) {
 		const artifact = requireOne(files, platform.matches, platform.label);
+		const artifactStats = await stat(artifact);
+		if (!artifactStats.isFile() || artifactStats.size === 0) {
+			throw new Error(`Updater artifact is empty: ${basename(artifact)}`);
+		}
 		const signatureFile = `${artifact}.sig`;
 		if (!fileSet.has(signatureFile)) {
 			throw new Error(`Missing updater signature: ${basename(signatureFile)}`);

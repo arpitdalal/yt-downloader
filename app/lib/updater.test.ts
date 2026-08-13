@@ -1,3 +1,4 @@
+import { BundleType } from "@tauri-apps/api/app";
 import type {
 	DownloadEvent,
 	DownloadOptions,
@@ -8,8 +9,21 @@ import {
 	calculateUpdateProgress,
 	downloadAndInstallAppUpdate,
 	formatUpdateError,
+	supportsInAppUpdates,
 	type UpdateDownloadProgress,
 } from "./updater.js";
+
+describe("supportsInAppUpdates", () => {
+	it("allows only bundle formats backed by the updater feed", () => {
+		expect(supportsInAppUpdates(BundleType.App)).toBe(true);
+		expect(supportsInAppUpdates(BundleType.Nsis)).toBe(true);
+		expect(supportsInAppUpdates(BundleType.AppImage)).toBe(true);
+		expect(supportsInAppUpdates(BundleType.Deb)).toBe(false);
+		expect(supportsInAppUpdates(BundleType.Rpm)).toBe(false);
+		expect(supportsInAppUpdates(BundleType.Msi)).toBe(false);
+		expect(supportsInAppUpdates(null)).toBe(false);
+	});
+});
 
 describe("calculateUpdateProgress", () => {
 	it("calculates a bounded percentage", () => {

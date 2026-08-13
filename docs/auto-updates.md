@@ -35,6 +35,8 @@ https://github.com/arpitdalal/yt-downloader/releases/latest/download/latest.json
 
 The updater applies directly to macOS, Windows, and AppImage installations. Linux `.deb` and `.rpm` installations should continue to update through their package installation flow.
 
+The in-app feed is stable-only. Release validation rejects prerelease versions; supporting beta releases requires a separate updater endpoint and opt-in channel.
+
 ## First release limitation
 
 Versions shipped before the updater plugin was added cannot discover updates. Users must manually install the first updater-enabled release. Updates after that release can use the in-app prompt.

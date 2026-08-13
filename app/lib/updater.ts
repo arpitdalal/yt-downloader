@@ -1,3 +1,4 @@
+import { BundleType, getBundleType } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
@@ -14,6 +15,19 @@ export interface UpdateDownloadProgress {
 
 let updateCheck: Promise<Update | null> | null = null;
 const UPDATE_DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000;
+const UPDATABLE_BUNDLE_TYPES = new Set<BundleType>([
+	BundleType.App,
+	BundleType.Nsis,
+	BundleType.AppImage,
+]);
+
+export function supportsInAppUpdates(
+	bundleType: BundleType | null | undefined,
+): boolean {
+	return bundleType !== null && bundleType !== undefined
+		? UPDATABLE_BUNDLE_TYPES.has(bundleType)
+		: false;
+}
 
 export function calculateUpdateProgress(
 	downloadedBytes: number,
@@ -39,7 +53,9 @@ export function checkForAppUpdate(): Promise<Update | null> {
 		return Promise.resolve(null);
 	}
 
-	updateCheck ??= check({ timeout: 10_000 });
+	updateCheck ??= getBundleType().then((bundleType) =>
+		supportsInAppUpdates(bundleType) ? check({ timeout: 10_000 }) : null,
+	);
 	return updateCheck;
 }
 
