@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import {
 	COOKIE_OVERRIDE_USE_DEFAULT,
 	COOKIE_SELECTION_STORAGE_KEY,
@@ -717,6 +718,9 @@ export default function App() {
 
 	return (
 		<div className="min-h-screen bg-gray-50 py-4 sm:py-8">
+			<UpdatePrompt
+				isAppBusy={status === "extracting" || status === "downloading"}
+			/>
 			<div className="max-w-4xl mx-auto px-4 sm:px-6">
 				<div className="mb-6 sm:mb-8">
 					<div className="text-center sm:text-left">

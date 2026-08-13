@@ -25,6 +25,7 @@
 	},
 	"bundle": {
 		"active": true,
+		"createUpdaterArtifacts": true,
 		"targets": ["dmg", "nsis", "appimage", "deb", "rpm"],
 		"category": "Utility",
 		"shortDescription": "Download videos and audio from supported platforms.",
@@ -57,5 +58,16 @@
 			"../build/icons/icon.icns",
 			"../build/icons/icon.ico"
 		]
+	},
+	"plugins": {
+		"updater": {
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2QzVFN0IzQkM1NTIyRDgKUldUWUlsVzhzK2ZGbHJhZXVsYm1IWFpyYTdHZjZvVUw2d0RJM3ZoeUxMK3hMcTZHZlduYTIrWkwK",
+			"endpoints": [
+				"https://github.com/arpitdalal/yt-downloader/releases/latest/download/latest.json"
+			],
+			"windows": {
+				"installMode": "passive"
+			}
+		}
 	}
 }

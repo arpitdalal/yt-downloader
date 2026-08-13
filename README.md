@@ -10,6 +10,7 @@ Desktop app (Tauri v2 + React + Python yt-dlp) for downloading YouTube videos or
 - Real-time progress updates
 - Save/open native dialogs
 - Cancel active work
+- Signed in-app update prompts
 - macOS, Windows, Linux support
 
 ## Stack
