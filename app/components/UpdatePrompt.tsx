@@ -12,6 +12,7 @@ type UpdatePhase = "available" | "downloading" | "restarting" | "error";
 
 interface UpdatePromptProps {
 	isAppBusy: boolean;
+	onInstallStateChange: (isInstalling: boolean) => void;
 }
 
 const INITIAL_PROGRESS: UpdateDownloadProgress = {
@@ -24,7 +25,10 @@ function formatMegabytes(bytes: number): string {
 	return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }
 
-export function UpdatePrompt({ isAppBusy }: UpdatePromptProps) {
+export function UpdatePrompt({
+	isAppBusy,
+	onInstallStateChange,
+}: UpdatePromptProps) {
 	const updateRef = useRef<Update | null>(null);
 	const [phase, setPhase] = useState<UpdatePhase>("available");
 	const [isVisible, setIsVisible] = useState(false);
@@ -82,12 +86,14 @@ export function UpdatePrompt({ isAppBusy }: UpdatePromptProps) {
 		setError(null);
 		setProgress(INITIAL_PROGRESS);
 		setPhase("downloading");
+		onInstallStateChange(true);
 
 		try {
 			await downloadAndInstallAppUpdate(update, setProgress);
 			setPhase("restarting");
 			await relaunchAfterUpdate();
 		} catch (installError) {
+			onInstallStateChange(false);
 			setError(formatUpdateError(installError));
 			setPhase("error");
 		}

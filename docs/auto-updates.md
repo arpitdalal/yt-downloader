@@ -14,7 +14,7 @@ Tauri updater signatures are separate from platform code signing.
 Generate a replacement keypair only before shipping the first updater-enabled release:
 
 ```bash
-pnpm tauri signer generate -- -w ~/.tauri/yt-downloader-updater.key
+pnpm tauri signer generate -w ~/.tauri/yt-downloader-updater.key
 ```
 
 The generated `.key.pub` content belongs in `plugins.updater.pubkey`. Add the private key and password through GitHub repository settings or `gh secret set`; do not paste them into workflow YAML.

@@ -1,5 +1,15 @@
+import type {
+	DownloadEvent,
+	DownloadOptions,
+	Update,
+} from "@tauri-apps/plugin-updater";
 import { describe, expect, it } from "vitest";
-import { calculateUpdateProgress, formatUpdateError } from "./updater.js";
+import {
+	calculateUpdateProgress,
+	downloadAndInstallAppUpdate,
+	formatUpdateError,
+	type UpdateDownloadProgress,
+} from "./updater.js";
 
 describe("calculateUpdateProgress", () => {
 	it("calculates a bounded percentage", () => {
@@ -21,6 +31,35 @@ describe("calculateUpdateProgress", () => {
 			downloadedBytes: 0,
 			totalBytes: null,
 			percent: null,
+		});
+	});
+});
+
+describe("downloadAndInstallAppUpdate", () => {
+	it("bounds the download duration and reports progress", async () => {
+		let receivedOptions: DownloadOptions | undefined;
+		const progress: UpdateDownloadProgress[] = [];
+		const update = {
+			async downloadAndInstall(
+				onEvent?: (event: DownloadEvent) => void,
+				options?: DownloadOptions,
+			): Promise<void> {
+				receivedOptions = options;
+				onEvent?.({ event: "Started", data: { contentLength: 100 } });
+				onEvent?.({ event: "Progress", data: { chunkLength: 25 } });
+				onEvent?.({ event: "Finished" });
+			},
+		} as unknown as Update;
+
+		await downloadAndInstallAppUpdate(update, (nextProgress) => {
+			progress.push(nextProgress);
+		});
+
+		expect(receivedOptions).toEqual({ timeout: 3_600_000 });
+		expect(progress.at(-1)).toEqual({
+			downloadedBytes: 100,
+			totalBytes: 100,
+			percent: 100,
 		});
 	});
 });

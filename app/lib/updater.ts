@@ -13,6 +13,7 @@ export interface UpdateDownloadProgress {
 }
 
 let updateCheck: Promise<Update | null> | null = null;
+const UPDATE_DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000;
 
 export function calculateUpdateProgress(
 	downloadedBytes: number,
@@ -49,26 +50,29 @@ export async function downloadAndInstallAppUpdate(
 	let downloadedBytes = 0;
 	let totalBytes: number | null = null;
 
-	await update.downloadAndInstall((event: DownloadEvent) => {
-		switch (event.event) {
-			case "Started":
-				totalBytes = event.data.contentLength ?? null;
-				downloadedBytes = 0;
-				onProgress(calculateUpdateProgress(downloadedBytes, totalBytes));
-				break;
-			case "Progress":
-				downloadedBytes += event.data.chunkLength;
-				onProgress(calculateUpdateProgress(downloadedBytes, totalBytes));
-				break;
-			case "Finished":
-				onProgress({
-					downloadedBytes: totalBytes ?? downloadedBytes,
-					totalBytes,
-					percent: 100,
-				});
-				break;
-		}
-	});
+	await update.downloadAndInstall(
+		(event: DownloadEvent) => {
+			switch (event.event) {
+				case "Started":
+					totalBytes = event.data.contentLength ?? null;
+					downloadedBytes = 0;
+					onProgress(calculateUpdateProgress(downloadedBytes, totalBytes));
+					break;
+				case "Progress":
+					downloadedBytes += event.data.chunkLength;
+					onProgress(calculateUpdateProgress(downloadedBytes, totalBytes));
+					break;
+				case "Finished":
+					onProgress({
+						downloadedBytes: totalBytes ?? downloadedBytes,
+						totalBytes,
+						percent: 100,
+					});
+					break;
+			}
+		},
+		{ timeout: UPDATE_DOWNLOAD_TIMEOUT_MS },
+	);
 }
 
 export async function relaunchAfterUpdate(): Promise<void> {
