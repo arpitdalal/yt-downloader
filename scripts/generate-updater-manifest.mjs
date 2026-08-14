@@ -50,6 +50,13 @@ function validateReleaseInput({ repo, tag, version }) {
 	}
 }
 
+function githubReleaseAssetName(assetName) {
+	// GitHub replaces spaces in an uploaded asset's immutable `name` with dots.
+	// softprops/action-gh-release restores the original filename only as its label,
+	// but updater URLs must address the immutable name.
+	return assetName.replaceAll(" ", ".");
+}
+
 export async function generateUpdaterManifest({
 	artifactsDirectory,
 	repo,
@@ -77,7 +84,7 @@ export async function generateUpdaterManifest({
 			throw new Error(`Updater signature is empty: ${basename(signatureFile)}`);
 		}
 
-		const assetName = basename(artifact);
+		const assetName = githubReleaseAssetName(basename(artifact));
 		platforms[platform.key] = {
 			signature,
 			url: `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(assetName)}`,
