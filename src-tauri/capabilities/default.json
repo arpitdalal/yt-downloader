@@ -7,7 +7,10 @@
 		"core:default",
 		"dialog:default",
 		"log:default",
-		"opener:default",
+		{
+			"identifier": "opener:allow-open-url",
+			"allow": [{ "url": "https://arpit.im/*" }]
+		},
 		"process:allow-restart",
 		"updater:default"
 	]
