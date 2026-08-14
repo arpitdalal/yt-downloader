@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import packageJson from "../../package.json";
 
-const WEBSITE_URL = "https://arpit.im?utm_source=yt-downloader&utm_medium=app";
+const WEBSITE_URL = "https://arpit.im/?utm_source=yt-downloader&utm_medium=app";
 
 export function AppFooter() {
 	const [version, setVersion] = useState(packageJson.version);
