@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppFooter } from "./components/AppFooter.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import {
 	COOKIE_OVERRIDE_USE_DEFAULT,
@@ -1131,6 +1132,7 @@ export default function App() {
 						</div>
 					)}
 				</div>
+				<AppFooter />
 			</div>
 		</div>
 	);
