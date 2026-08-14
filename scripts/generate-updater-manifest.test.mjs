@@ -11,9 +11,17 @@ async function createArtifacts({
 } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "yt-downloader-updater-"));
 	const artifacts = [
-		["mac", "YouTube.Downloader.app.tar.gz", "mac-signature"],
-		["windows", "YouTube.Downloader_2.4.0_x64-setup.exe", "win-signature"],
-		["linux", "YouTube.Downloader_2.4.0_amd64.AppImage", "linux-signature"],
+		["mac", "YouTube Downloader.app.tar.gz", "mac-signature"],
+		[
+			"windows",
+			"YouTube Downloader_2.4.0_x64-setup.exe",
+			"win-signature",
+		],
+		[
+			"linux",
+			"YouTube Downloader_2.4.0_amd64.AppImage",
+			"linux-signature",
+		],
 	];
 
 	for (const [folder, name, signature] of artifacts) {
@@ -53,7 +61,7 @@ test("generates a signed entry for every supported desktop target", async () => 
 		);
 		assert.match(
 			manifest.platforms["windows-x86_64"].url,
-			/^https:\/\/github\.com\/arpitdalal\/yt-downloader\/releases\/download\/v2\.4\.0\//,
+			/^https:\/\/github\.com\/arpitdalal\/yt-downloader\/releases\/download\/v2\.4\.0\/YouTube\.Downloader_2\.4\.0_x64-setup\.exe$/,
 		);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
