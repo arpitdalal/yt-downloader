@@ -113,10 +113,10 @@ Write-Host "OK: JS runtime bundled at $jsRuntimeDir" -ForegroundColor Green
 Write-Host "`n=== Step 3: FFmpeg ===" -ForegroundColor Yellow
 
 # Pinned release (yt-dlp/FFmpeg-Builds). Upgrade by choosing a newer autobuild-* tag and updating SHA + archive name.
-$ffmpegReleaseTag = "autobuild-2026-08-11-18-08"
-$ffmpegArchiveName = "ffmpeg-N-126061-g844e10e1a7-win64-gpl.zip"
+$ffmpegReleaseTag = "autobuild-2026-08-30-18-16"
+$ffmpegArchiveName = "ffmpeg-N-126337-g818cecc6e1-win64-gpl.zip"
 $ffmpegUrl = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/$ffmpegReleaseTag/$ffmpegArchiveName"
-$expectedFfmpegZipHash = "cdb6000941ef5c3b39701202ae9acad12cb383f81c3309556cd2b035e56d348d"
+$expectedFfmpegZipHash = "671a2bca2a0cefcba09495fea705a3c664720a626f07375cae61e4f6d2ed87c3"
 Write-Host "Downloading FFmpeg..."
 try {
     Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip

@@ -18,8 +18,10 @@ PYTHON="$PYTHON_DIR/bin/python3"
 FFMPEG="$REPO_DIR/src-tauri/resources/ffmpeg/ffmpeg"
 JS_RUNTIME="$REPO_DIR/src-tauri/resources/jsruntime/deno"
 
-# The nightly must use the same bundled runtimes as the packaged macOS app.
-if [ ! -x "$PYTHON" ] || [ ! -x "$FFMPEG" ] || [ ! -x "$JS_RUNTIME" ]; then
+# The nightly must use the same healthy bundled runtimes as the packaged macOS app.
+if [ ! -x "$PYTHON" ] || ! "$PYTHON" --version >/dev/null 2>&1 || \
+    [ ! -x "$FFMPEG" ] || ! "$FFMPEG" -version >/dev/null 2>&1 || \
+    [ ! -x "$JS_RUNTIME" ] || ! "$JS_RUNTIME" --version >/dev/null 2>&1; then
   echo "Bundled runtime missing, running bundle script..."
   ./scripts/bundle-dependencies-macos.sh
 fi
