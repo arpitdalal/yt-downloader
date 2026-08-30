@@ -13,25 +13,32 @@ echo "=== $(date) ==="
 
 cd "$REPO_DIR"
 
-# Ensure bundled python exists; full re-bundle only when missing
 PYTHON_DIR="$REPO_DIR/src-tauri/resources/python"
-if [ ! -f "$PYTHON_DIR/bin/python3" ]; then
-  echo "Bundled Python missing, running bundle script..."
-  ./scripts/bundle-dependencies-macos.sh
-fi
-
 PYTHON="$PYTHON_DIR/bin/python3"
 FFMPEG="$REPO_DIR/src-tauri/resources/ffmpeg/ffmpeg"
+JS_RUNTIME="$REPO_DIR/src-tauri/resources/jsruntime/deno"
+
+# The nightly must use the same healthy bundled runtimes as the packaged macOS app.
+if [ ! -x "$PYTHON" ] || ! "$PYTHON" --version >/dev/null 2>&1 || \
+    [ ! -x "$FFMPEG" ] || ! "$FFMPEG" -version >/dev/null 2>&1 || \
+    [ ! -x "$JS_RUNTIME" ] || ! "$JS_RUNTIME" --version >/dev/null 2>&1; then
+  echo "Bundled runtime missing, running bundle script..."
+  ./scripts/bundle-dependencies-macos.sh
+fi
 
 # Keep bundled yt-dlp/pytest aligned with requirements.txt (avoids stale runtime)
 echo "Syncing bundled Python dependencies from requirements.txt..."
 "$PYTHON" -m pip install -q -r "$REPO_DIR/python/requirements.txt"
 cp "$REPO_DIR/python/downloader.py" "$PYTHON_DIR/downloader.py"
 echo "Bundled yt-dlp: $("$PYTHON" -m pip show yt-dlp | awk '/^Version:/{print $2}')"
+echo "Bundled JS runtime:"
+"$JS_RUNTIME" --version
 
 export RUN_REAL_WORLD_TESTS=1
 export YT_DLP_ENABLE_BROWSER_COOKIES=false
-[ -f "$FFMPEG" ] && export FFMPEG_PATH="$FFMPEG"
+export FFMPEG_PATH="$FFMPEG"
+export YT_DLP_JS_RUNTIME_PATH="$JS_RUNTIME"
+export YT_DLP_JS_RUNTIME_NAME=deno
 
 # Add gh to PATH (Homebrew on Apple Silicon)
 export PATH="/opt/homebrew/bin:$PATH"

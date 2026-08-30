@@ -105,15 +105,15 @@ echo "OK: JS runtime bundled at $JSRUNTIME_DIR"
 
 printf '\n=== Step 3: FFmpeg ===\n'
 # Pinned release (yt-dlp/FFmpeg-Builds). Upgrade by choosing a newer autobuild-* tag and updating SHA + archive base.
-FFMPEG_RELEASE_TAG="autobuild-2026-08-11-18-08"
+FFMPEG_RELEASE_TAG="autobuild-2026-08-30-18-16"
 case "$PYTHON_ARCH" in
   x86_64)
-    FFMPEG_ARCHIVE_BASE="ffmpeg-N-126061-g844e10e1a7-linux64-gpl"
-    FFMPEG_SHA256="722f3ccb2c9a63c4583aaf6300f6243562cfc5028ef88992c676afff45442c7e"
+    FFMPEG_ARCHIVE_BASE="ffmpeg-N-126337-g818cecc6e1-linux64-gpl"
+    FFMPEG_SHA256="e89888df3771c904b467f7a7171dfa0ba114b73d763257b4537a82383f9f0795"
     ;;
   aarch64 | arm64)
-    FFMPEG_ARCHIVE_BASE="ffmpeg-N-126061-g844e10e1a7-linuxarm64-gpl"
-    FFMPEG_SHA256="2c88e67ab64618c3ed870a14cf29f0771230afb1352700062b9484ec33bdfe2a"
+    FFMPEG_ARCHIVE_BASE="ffmpeg-N-126337-g818cecc6e1-linuxarm64-gpl"
+    FFMPEG_SHA256="d4d5fd0b54d99e707f420c81c3202ecdf3cf02501be1841c90436133909e3d4f"
     ;;
   *)
     echo "Unsupported Linux architecture for bundled FFmpeg: $PYTHON_ARCH"
