@@ -1003,7 +1003,9 @@ class TestExtractVideoInfo:
                 return None
 
             def extract_info(self, _url, download=False):
-                if self.opts.get("js_runtimes"):
+                youtube_args = (self.opts.get("extractor_args") or {}).get("youtube") or {}
+                # Succeed only on the dedicated fetch_pot attempt so we still exercise the cascade.
+                if "fetch_pot" in youtube_args:
                     return sample_video_info
                 raise yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
 
@@ -1021,13 +1023,14 @@ class TestExtractVideoInfo:
                 downloader = YouTubeDownloader()
                 result = downloader.extract_video_info("https://youtube.com/watch?v=test")
                 assert result is not None
-                assert any(opts.get("js_runtimes") for opts in attempted_opts)
+                assert attempted_opts[0].get("js_runtimes"), "default attempt must use bundled JS runtime"
                 fetch_pot_attempts = [
                     opts
                     for opts in attempted_opts
                     if "fetch_pot" in ((opts.get("extractor_args") or {}).get("youtube") or {})
                 ]
                 assert fetch_pot_attempts
+                assert all(opts.get("js_runtimes") for opts in attempted_opts)
 
     def test_extract_skips_fetch_pot_when_runtime_is_unavailable(self, sample_video_info):
         attempted_opts = []
@@ -2396,11 +2399,11 @@ class TestDownloadVideo:
         opts = YouTubeDownloader._compose_ydl_opts(
             {"extractor_args": {"youtube": {"player_client": ["web"]}}},
             fetch_pot_runtime=runtime,
-            extractor_args={"youtube": {"player_client": ["android"], "player_js_variant": ["default"]}},
+            extractor_args={"youtube": {"player_client": ["android"], "player_js_variant": ["main"]}},
         )
         youtube_args = opts.get("extractor_args", {}).get("youtube", {})
         assert youtube_args.get("player_client") == ["web", "android"]
-        assert youtube_args.get("player_js_variant") == ["default"]
+        assert youtube_args.get("player_js_variant") == ["main"]
         assert youtube_args.get("fetch_pot") == ["auto"]
         assert opts.get("js_runtimes") is not None
 

@@ -1104,8 +1104,6 @@ class YouTubeDownloader:
         return {
             "youtube": {
                 "fetch_pot": ["auto"],
-                # Keep default variant unless caller overrides.
-                "player_js_variant": ["default"],
             }
         }
 
@@ -1438,6 +1436,9 @@ class YouTubeDownloader:
             default=False,
         )
         fetch_pot_runtime = self._resolve_fetch_pot_runtime()
+        # Bundled JS runtime must apply to every attempt, not only fetch_pot.
+        if fetch_pot_runtime and isinstance(fetch_pot_runtime.get("js_runtimes"), dict):
+            base_opts["js_runtimes"] = fetch_pot_runtime["js_runtimes"]
 
         if cookie_source_error and self._cookie_selection_mode_from_env() == "manual":
             self._last_extract_error = cookie_source_error
@@ -1480,12 +1481,13 @@ class YouTubeDownloader:
                             ),
                         )
                     )
+        # android_vr needs no PO token; better anonymous bot-check fallback than mweb.
         attempts.append(
             (
-                "mweb",
+                "android_vr",
                 self._compose_ydl_opts(
                     base_opts,
-                    extractor_args={"youtube": {"player_client": ["mweb"]}},
+                    extractor_args={"youtube": {"player_client": ["android_vr"]}},
                 ),
             )
         )
@@ -2697,15 +2699,14 @@ class YouTubeDownloader:
                         }
                     )
 
-            # Some videos block default web client HQ streams but still allow adaptive
-            # formats via mweb client without dropping to low progressive quality.
+            # android_vr needs no PO token; better anonymous bot-check fallback than mweb.
             attempt_profiles.append(
                 {
-                    "name": "hq_mweb",
+                    "name": "hq_android_vr",
                     "selectors": self._build_format_selectors(quality),
                     "cookiesfrombrowser": None,
                     "fetch_pot": False,
-                    "extractor_args": {"youtube": {"player_client": ["mweb"]}},
+                    "extractor_args": {"youtube": {"player_client": ["android_vr"]}},
                 }
             )
 
@@ -2774,6 +2775,10 @@ class YouTubeDownloader:
                     # Only skip certificate check if explicitly enabled via environment variable
                     if skip_cert_check:
                         base_opts["nocheckcertificate"] = True
+
+                    # Bundled JS runtime on every attempt; fetch_pot args only when profile asks.
+                    if fetch_pot_runtime and isinstance(fetch_pot_runtime.get("js_runtimes"), dict):
+                        base_opts["js_runtimes"] = fetch_pot_runtime["js_runtimes"]
 
                     fetch_pot_runtime_for_attempt = fetch_pot_runtime if profile_fetch_pot else None
                     composed_base_opts = self._compose_ydl_opts(
