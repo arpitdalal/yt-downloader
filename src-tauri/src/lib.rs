@@ -25,17 +25,26 @@ const SUPPORTED_COOKIE_BROWSERS: [&str; 10] = [
 
 type SharedDownloadState = Arc<DownloadState>;
 const COOKIE_SOURCE_CACHE_TTL: Duration = Duration::from_secs(30);
+/// PO-token provider plugins are install-time; cache longer than cookie probes.
+const AUTH_CAPABILITIES_CACHE_TTL: Duration = Duration::from_secs(300);
 const MAX_COOKIE_SOURCE_ATTEMPTS: usize = 6;
 
 struct DownloadState {
     current_process: Mutex<Option<Child>>,
     is_canceled: AtomicBool,
     cookie_sources_cache: Mutex<Option<CookieSourceCache>>,
+    auth_capabilities_cache: Mutex<Option<AuthCapabilitiesCache>>,
 }
 
 #[derive(Debug, Clone)]
 struct CookieSourceCache {
     catalog: CookieSourceCatalog,
+    fetched_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct AuthCapabilitiesCache {
+    po_token_providers_available: bool,
     fetched_at: Instant,
 }
 
@@ -45,6 +54,7 @@ impl Default for DownloadState {
             current_process: Mutex::new(None),
             is_canceled: AtomicBool::new(false),
             cookie_sources_cache: Mutex::new(None),
+            auth_capabilities_cache: Mutex::new(None),
         }
     }
 }
@@ -327,11 +337,19 @@ fn get_log_info(app: AppHandle) -> Result<LogInfo, String> {
 }
 
 #[tauri::command]
-fn get_youtube_auth_status(app: AppHandle) -> Result<YouTubeAuthStatus, String> {
-    Ok(detected_browser_auth_status(
-        get_js_runtime_path(&app),
-        probe_po_token_providers_available(&app),
-    ))
+async fn get_youtube_auth_status(
+    app: AppHandle,
+    state: State<'_, SharedDownloadState>,
+) -> Result<YouTubeAuthStatus, String> {
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(detected_browser_auth_status(
+            get_js_runtime_path(&app),
+            probe_po_token_providers_available(&app, &shared_state),
+        ))
+    })
+    .await
+    .map_err(|error| format!("Failed to run YouTube auth status task: {error}"))?
 }
 
 #[tauri::command]
@@ -943,14 +961,30 @@ struct PythonAuthCapabilitiesResponse {
     error: Option<String>,
 }
 
-fn probe_po_token_providers_available(app: &AppHandle) -> bool {
-    match fetch_auth_capabilities_from_python(app) {
+fn probe_po_token_providers_available(app: &AppHandle, state: &SharedDownloadState) -> bool {
+    if let Ok(guard) = state.auth_capabilities_cache.lock() {
+        if let Some(cache) = guard.as_ref() {
+            if cache.fetched_at.elapsed() < AUTH_CAPABILITIES_CACHE_TTL {
+                return cache.po_token_providers_available;
+            }
+        }
+    }
+
+    let available = match fetch_auth_capabilities_from_python(app) {
         Ok(caps) => caps.po_token_providers_available,
         Err(error) => {
             warn!("Failed to probe PO-token providers: {error}");
             false
         }
+    };
+
+    if let Ok(mut guard) = state.auth_capabilities_cache.lock() {
+        *guard = Some(AuthCapabilitiesCache {
+            po_token_providers_available: available,
+            fetched_at: Instant::now(),
+        });
     }
+    available
 }
 
 fn fetch_auth_capabilities_from_python(
