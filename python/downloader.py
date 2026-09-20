@@ -390,6 +390,42 @@ class YouTubeDownloader:
         return value.strip().lower() in ("1", "true", "yes", "on")
 
     @staticmethod
+    def _is_youtube_bot_check_error(message: str) -> bool:
+        """True when YouTube rejects the request as unauthenticated bot traffic."""
+        lowered = str(message or "").lower()
+        return (
+            "sign in to confirm you're not a bot" in lowered
+            or "sign in to confirm you’re not a bot" in lowered
+            or "use --cookies-from-browser or --cookies for the authentication" in lowered
+        )
+
+    @classmethod
+    def _resolve_impersonate_target(cls):
+        """Chrome TLS fingerprint when curl_cffi is installed; None otherwise."""
+        if not cls._is_truthy_env("YT_DLP_ENABLE_IMPERSONATE", default=True):
+            return None
+        try:
+            import curl_cffi  # noqa: F401
+            from yt_dlp.networking.impersonate import ImpersonateTarget
+
+            return ImpersonateTarget.from_str("chrome")
+        except Exception:
+            return None
+
+    @classmethod
+    def _po_token_providers_available(cls) -> bool:
+        """True when a yt-dlp PO-token plugin is registered (fetch_pot needs one)."""
+        try:
+            from yt_dlp.extractor.youtube.pot._registry import _pot_providers
+            from yt_dlp.plugins import load_all_plugins
+
+            load_all_plugins()
+            providers = _pot_providers.value or {}
+            return bool(providers)
+        except Exception:
+            return False
+
+    @staticmethod
     def _default_cookie_browser_candidates() -> list[str]:
         if sys.platform == "darwin":
             return [
@@ -1127,13 +1163,18 @@ class YouTubeDownloader:
         merged_extractor_args = cls._merge_extractor_args(
             ydl_opts.get("extractor_args"),
             extractor_args,
-            cls._fetch_pot_extractor_args() if fetch_pot_runtime else None,
+            (cls._fetch_pot_extractor_args() if fetch_pot_runtime and cls._po_token_providers_available() else None),
         )
         if merged_extractor_args:
             ydl_opts["extractor_args"] = merged_extractor_args
 
         if fetch_pot_runtime and isinstance(fetch_pot_runtime.get("js_runtimes"), dict):
             ydl_opts["js_runtimes"] = fetch_pot_runtime["js_runtimes"]
+
+        if "impersonate" not in ydl_opts:
+            impersonate = cls._resolve_impersonate_target()
+            if impersonate is not None:
+                ydl_opts["impersonate"] = impersonate
 
         return ydl_opts
 
@@ -1436,6 +1477,7 @@ class YouTubeDownloader:
             default=False,
         )
         fetch_pot_runtime = self._resolve_fetch_pot_runtime()
+        pot_providers_available = self._po_token_providers_available()
         # Bundled JS runtime must apply to every attempt, not only fetch_pot.
         if fetch_pot_runtime and isinstance(fetch_pot_runtime.get("js_runtimes"), dict):
             base_opts["js_runtimes"] = fetch_pot_runtime["js_runtimes"]
@@ -1458,14 +1500,15 @@ class YouTubeDownloader:
                         self._compose_ydl_opts(base_opts, cookiesfrombrowser=cookiesfrombrowser),
                     )
                 )
-        if fetch_pot_runtime:
+        # fetch_pot:auto is a no-op without a PO-token provider plugin.
+        if fetch_pot_runtime and pot_providers_available:
             attempts.append(
                 (
                     "fetch_pot",
                     self._compose_ydl_opts(base_opts, fetch_pot_runtime=fetch_pot_runtime),
                 )
             )
-        if fetch_pot_runtime:
+        if fetch_pot_runtime and pot_providers_available:
             for source in cookie_sources:
                 cookiesfrombrowser = source.get("cookiesfrombrowser")
                 browser_name = str(source.get("browser") or "browser")
@@ -1481,7 +1524,7 @@ class YouTubeDownloader:
                             ),
                         )
                     )
-        # android_vr needs no PO token; better anonymous bot-check fallback than mweb.
+        # android_vr still works without PO token for many videos; prefer over mweb.
         attempts.append(
             (
                 "android_vr",
@@ -1514,11 +1557,29 @@ class YouTubeDownloader:
                 "fetch_pot_runtime_available": bool(fetch_pot_runtime),
                 "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
                 "fetch_pot_runtime_path": fetch_pot_runtime.get("path") if fetch_pot_runtime else None,
+                "po_token_providers_available": pot_providers_available,
+                "impersonate": bool(self._resolve_impersonate_target()),
             },
         )
 
         attempt_errors: list[str] = []
+        skip_anonymous_after_bot_check = False
+        skip_anonymous_except_recovery = False
         for attempt_name, ydl_opts in attempts:
+            has_cookies = bool(ydl_opts.get("cookiesfrombrowser") or ydl_opts.get("cookiefile"))
+            youtube_args = (ydl_opts.get("extractor_args") or {}).get("youtube") or {}
+            is_fetch_pot_attempt = "fetch_pot" in youtube_args
+            is_android_vr_attempt = attempt_name == "android_vr"
+            if skip_anonymous_after_bot_check and not has_cookies:
+                continue
+            if (
+                skip_anonymous_except_recovery
+                and not has_cookies
+                and not is_android_vr_attempt
+                and not is_fetch_pot_attempt
+            ):
+                continue
+
             self._emit_debug_event(
                 "auth_debug",
                 {
@@ -1529,6 +1590,7 @@ class YouTubeDownloader:
                     "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
                     "js_runtimes": bool(ydl_opts.get("js_runtimes")),
                     "extractor_args": ydl_opts.get("extractor_args"),
+                    "impersonate": bool(ydl_opts.get("impersonate")),
                 },
             )
             try:
@@ -1571,6 +1633,13 @@ class YouTubeDownloader:
                     },
                 )
                 attempt_errors.append(f"{attempt_name}: {truncated}")
+                # Extra anonymous clients after an IP-level bot check just heat the IP.
+                # Keep android_vr + fetch_pot recovery; drop plain android/default duplicates.
+                if not has_cookies and self._is_youtube_bot_check_error(truncated):
+                    if is_android_vr_attempt:
+                        skip_anonymous_after_bot_check = True
+                    else:
+                        skip_anonymous_except_recovery = True
                 continue
             except (ValueError, KeyError, TypeError) as e:
                 print(f"Error extracting video info (DataError): {e}", file=sys.stderr)
@@ -2560,6 +2629,7 @@ class YouTubeDownloader:
         )
         fetch_pot_enabled = self._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True)
         fetch_pot_runtime = self._resolve_fetch_pot_runtime()
+        pot_providers_available = self._po_token_providers_available()
         ffmpeg_location_for_ytdlp = self._resolve_ffmpeg_location_for_ytdlp()
         self._emit_debug_event(
             "quality_debug",
@@ -2577,6 +2647,8 @@ class YouTubeDownloader:
                 "fetch_pot_runtime_available": bool(fetch_pot_runtime),
                 "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
                 "fetch_pot_runtime_path": fetch_pot_runtime.get("path") if fetch_pot_runtime else None,
+                "po_token_providers_available": pot_providers_available,
+                "impersonate": bool(self._resolve_impersonate_target()),
                 "ffmpeg_location_for_ytdlp": ffmpeg_location_for_ytdlp,
             },
         )
@@ -2672,7 +2744,7 @@ class YouTubeDownloader:
                         "cookie_source_id": source_id,
                     }
                 )
-            if fetch_pot_enabled and fetch_pot_runtime:
+            if fetch_pot_enabled and fetch_pot_runtime and pot_providers_available:
                 attempt_profiles.append(
                     {
                         "name": "hq_best_fetch_pot",
@@ -2682,7 +2754,7 @@ class YouTubeDownloader:
                         "extractor_args": None,
                     }
                 )
-            if fetch_pot_enabled and fetch_pot_runtime:
+            if fetch_pot_enabled and fetch_pot_runtime and pot_providers_available:
                 for cookie_source in cookie_sources:
                     source_id = str(cookie_source.get("id") or cookie_source.get("browser") or "source")
                     cookiesfrombrowser = cookie_source.get("cookiesfrombrowser")
@@ -2699,7 +2771,7 @@ class YouTubeDownloader:
                         }
                     )
 
-            # android_vr needs no PO token; better anonymous bot-check fallback than mweb.
+            # android_vr still works without PO token for many videos; prefer over mweb.
             attempt_profiles.append(
                 {
                     "name": "hq_android_vr",
@@ -2725,6 +2797,8 @@ class YouTubeDownloader:
 
             # Check if SSL certificate verification should be disabled
             skip_cert_check = os.environ.get("YT_DLP_SKIP_CERT_CHECK", "false").lower() == "true"
+            skip_anonymous_after_bot_check = False
+            skip_anonymous_except_recovery = False
 
             for profile in attempt_profiles:
                 format_selectors = profile["selectors"]
@@ -2732,6 +2806,18 @@ class YouTubeDownloader:
                 profile_cookies = profile.get("cookiesfrombrowser")
                 profile_fetch_pot = bool(profile.get("fetch_pot"))
                 profile_extractor_args = profile.get("extractor_args")
+                has_cookies = isinstance(profile_cookies, tuple)
+                is_android_vr_profile = profile_name == "hq_android_vr"
+
+                if skip_anonymous_after_bot_check and not has_cookies:
+                    continue
+                if (
+                    skip_anonymous_except_recovery
+                    and not has_cookies
+                    and not is_android_vr_profile
+                    and not profile_fetch_pot
+                ):
+                    continue
 
                 for format_selector in format_selectors:
                     progress_tracker.selected_format = None
@@ -2844,6 +2930,12 @@ class YouTubeDownloader:
                                 ),
                                 video_info=video_info,
                             )
+                        if not has_cookies and self._is_youtube_bot_check_error(error_msg):
+                            if is_android_vr_profile:
+                                skip_anonymous_after_bot_check = True
+                            else:
+                                skip_anonymous_except_recovery = True
+                            break
                         # Retry with another selector/profile. We intentionally do not
                         # raise here to avoid hard-failing on transient/content-specific
                         # errors that another selector/client can recover from.
@@ -3221,7 +3313,7 @@ def main():
         print(
             "Usage: python downloader.py <youtube_url> [download_from_start] [quality] "
             "[start_time] [end_time] [output_path] OR python downloader.py --validate <youtube_url> "
-            "OR python downloader.py --list-cookie-sources",
+            "OR python downloader.py --list-cookie-sources OR python downloader.py --auth-capabilities",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -3237,6 +3329,32 @@ def main():
             sys.stdout.write(json.dumps({"success": False, "error": message, "sources": []}))
             sys.stdout.flush()
             print(f"Failed to list cookie sources: {message}", file=sys.stderr)
+            sys.exit(1)
+
+    if sys.argv[1] == "--auth-capabilities":
+        try:
+            payload = {
+                "success": True,
+                "po_token_providers_available": YouTubeDownloader._po_token_providers_available(),
+                "impersonate_available": YouTubeDownloader._resolve_impersonate_target() is not None,
+            }
+            sys.stdout.write(json.dumps(payload))
+            sys.stdout.flush()
+            sys.exit(0)
+        except Exception as error:
+            message = YouTubeDownloader._truncate_error_message(str(error), limit=180)
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "success": False,
+                        "error": message,
+                        "po_token_providers_available": False,
+                        "impersonate_available": False,
+                    }
+                )
+            )
+            sys.stdout.flush()
+            print(f"Failed to report auth capabilities: {message}", file=sys.stderr)
             sys.exit(1)
 
     # Check if this is a validation request

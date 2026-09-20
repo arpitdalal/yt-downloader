@@ -1,4 +1,6 @@
-# `default` extra includes `yt-dlp-ejs`, used by fetch_pot integration.
-yt-dlp[default]==2026.8.19
+# `default` = ejs (JS challenges). `curl-cffi` = TLS impersonation YouTube expects.
+# Pin curl-cffi explicitly so resolution cannot fall back to vulnerable <0.15 releases.
+yt-dlp[default,curl-cffi]==2026.8.19
+curl-cffi>=0.15.0,<0.17
 pytest>=9.1.1
 pytest-mock>=3.12.0
