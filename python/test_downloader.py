@@ -985,7 +985,7 @@ class TestExtractVideoInfo:
                 assert attempted_opts[0].get("cookiesfrombrowser") is None
                 assert any(opts.get("cookiesfrombrowser") == ("chrome",) for opts in attempted_opts)
 
-    def test_extract_attempts_fetch_pot_when_runtime_is_available(self, sample_video_info, temp_dir):
+    def test_extract_attempts_fetch_pot_when_provider_and_runtime_available(self, sample_video_info, temp_dir):
         attempted_opts = []
         runtime_path = temp_dir / "node"
         runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -1010,27 +1010,99 @@ class TestExtractVideoInfo:
                 raise yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
 
         with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
-            with patch.dict(
-                os.environ,
-                {
-                    "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
-                    "YT_DLP_ENABLE_FETCH_POT": "true",
-                    "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
-                    "YT_DLP_JS_RUNTIME_NAME": "node",
-                },
-                clear=True,
-            ):
-                downloader = YouTubeDownloader()
-                result = downloader.extract_video_info("https://youtube.com/watch?v=test")
-                assert result is not None
-                assert attempted_opts[0].get("js_runtimes"), "default attempt must use bundled JS runtime"
-                fetch_pot_attempts = [
-                    opts
-                    for opts in attempted_opts
-                    if "fetch_pot" in ((opts.get("extractor_args") or {}).get("youtube") or {})
-                ]
-                assert fetch_pot_attempts
-                assert all(opts.get("js_runtimes") for opts in attempted_opts)
+            with patch.object(YouTubeDownloader, "_po_token_providers_available", return_value=True):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
+                        "YT_DLP_ENABLE_FETCH_POT": "true",
+                        "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
+                        "YT_DLP_JS_RUNTIME_NAME": "node",
+                    },
+                    clear=True,
+                ):
+                    downloader = YouTubeDownloader()
+                    result = downloader.extract_video_info("https://youtube.com/watch?v=test")
+                    assert result is not None
+                    assert attempted_opts[0].get("js_runtimes"), "default attempt must use bundled JS runtime"
+                    fetch_pot_attempts = [
+                        opts
+                        for opts in attempted_opts
+                        if "fetch_pot" in ((opts.get("extractor_args") or {}).get("youtube") or {})
+                    ]
+                    assert fetch_pot_attempts
+                    assert all(opts.get("js_runtimes") for opts in attempted_opts)
+
+    def test_extract_skips_fetch_pot_without_provider_plugin(self, sample_video_info, temp_dir):
+        attempted_opts = []
+        runtime_path = temp_dir / "node"
+        runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runtime_path.chmod(0o755)
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def extract_info(self, _url, download=False):
+                return sample_video_info
+
+        with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
+            with patch.object(YouTubeDownloader, "_po_token_providers_available", return_value=False):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
+                        "YT_DLP_ENABLE_FETCH_POT": "true",
+                        "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
+                        "YT_DLP_JS_RUNTIME_NAME": "node",
+                    },
+                    clear=True,
+                ):
+                    downloader = YouTubeDownloader()
+                    result = downloader.extract_video_info("https://youtube.com/watch?v=test")
+                    assert result is not None
+                    assert all(
+                        "fetch_pot" not in ((opts.get("extractor_args") or {}).get("youtube") or {})
+                        for opts in attempted_opts
+                    )
+
+    def test_extract_skips_anonymous_clients_after_bot_check(self, sample_video_info):
+        attempted_names: list[str] = []
+
+        class MockYDL:
+            def __init__(self, opts):
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def extract_info(self, _url, download=False):
+                extractor_args = (self.opts.get("extractor_args") or {}).get("youtube") or {}
+                clients = extractor_args.get("player_client")
+                attempted_names.append(clients[0] if clients else "default")
+                raise yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+
+        with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
+            with patch.object(YouTubeDownloader, "_po_token_providers_available", return_value=False):
+                with patch.dict(
+                    os.environ,
+                    {"YT_DLP_ENABLE_BROWSER_COOKIES": "false", "YT_DLP_ENABLE_FETCH_POT": "false"},
+                    clear=True,
+                ):
+                    downloader = YouTubeDownloader()
+                    result = downloader.extract_video_info("https://youtube.com/watch?v=test")
+                    assert result is None
+                    # default bot-check → still try android_vr once → skip android
+                    assert attempted_names == ["default", "android_vr"]
 
     def test_extract_skips_fetch_pot_when_runtime_is_unavailable(self, sample_video_info):
         attempted_opts = []
@@ -2396,11 +2468,12 @@ class TestDownloadVideo:
             "js_runtimes": {"node": {"path": str(runtime_path), "paths": [str(runtime_path)]}},
         }
 
-        opts = YouTubeDownloader._compose_ydl_opts(
-            {"extractor_args": {"youtube": {"player_client": ["web"]}}},
-            fetch_pot_runtime=runtime,
-            extractor_args={"youtube": {"player_client": ["android"], "player_js_variant": ["main"]}},
-        )
+        with patch.object(YouTubeDownloader, "_po_token_providers_available", return_value=True):
+            opts = YouTubeDownloader._compose_ydl_opts(
+                {"extractor_args": {"youtube": {"player_client": ["web"]}}},
+                fetch_pot_runtime=runtime,
+                extractor_args={"youtube": {"player_client": ["android"], "player_js_variant": ["main"]}},
+            )
         youtube_args = opts.get("extractor_args", {}).get("youtube", {})
         assert youtube_args.get("player_client") == ["web", "android"]
         assert youtube_args.get("player_js_variant") == ["main"]

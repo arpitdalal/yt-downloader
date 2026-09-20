@@ -139,7 +139,7 @@ def test_extract_video_info_cli(url: str) -> None:
 
     process = subprocess.run(
         command,
-        env={**os.environ, "YT_DLP_ENABLE_BROWSER_COOKIES": "false"},
+        env={**os.environ},
         capture_output=True,
         text=True,
         timeout=120,
@@ -174,7 +174,7 @@ def test_real_world_download_cli(url: str, tmp_path: Path) -> None:
         str(output_path),
     ]
 
-    env = {**os.environ, "YT_DLP_ENABLE_BROWSER_COOKIES": "false"}
+    env = {**os.environ}
     process = subprocess.run(
         command,
         env=env,

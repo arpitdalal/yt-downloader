@@ -146,20 +146,35 @@ if [[ -z "$SIGNING_IDENTITY" ]]; then
   SIGNING_IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1 || true)"
 fi
 
-if [[ -n "$SIGNING_IDENTITY" ]]; then
-  echo "Signing bundled runtime binaries with identity: $SIGNING_IDENTITY"
+# python-build-standalone is Team-signed; pip wheels ship adhoc .so files. Without a shared
+# identity, curl_cffi (and other native deps) fail to dlopen under Hardened Runtime.
+sign_macho_tree() {
+  local identity="$1"
+  local root="$2"
   while IFS= read -r candidate; do
     if file -b "$candidate" | grep -q "Mach-O"; then
-      codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$candidate"
+      if [[ "$identity" == "-" ]]; then
+        codesign --force --sign - "$candidate"
+      else
+        codesign --force --sign "$identity" --timestamp --options runtime "$candidate"
+      fi
     fi
-  done < <(find "$PYTHON_DIR" "$FFMPEG_DIR" "$JSRUNTIME_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
+  done < <(find "$root" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
+}
+
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+  echo "Signing bundled runtime binaries with identity: $SIGNING_IDENTITY"
+  sign_macho_tree "$SIGNING_IDENTITY" "$PYTHON_DIR"
+  sign_macho_tree "$SIGNING_IDENTITY" "$FFMPEG_DIR"
+  sign_macho_tree "$SIGNING_IDENTITY" "$JSRUNTIME_DIR"
   echo "OK: bundled runtime binaries signed"
 else
   if is_truthy "$REQUIRE_SIGNED_BUNDLED_RUNTIMES"; then
     echo "ERROR: no Developer ID identity found; refusing unsigned bundled runtime binaries."
     exit 1
   fi
-  echo "WARNING: no Developer ID identity found; bundled runtime binaries left unsigned"
+  echo "WARNING: no Developer ID identity found; adhoc-signing Python tree so curl_cffi can load"
+  sign_macho_tree "-" "$PYTHON_DIR"
 fi
 
 printf '\n=== Summary ===\n'

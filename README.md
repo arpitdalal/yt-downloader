@@ -78,7 +78,8 @@ For downloadable macOS releases, use Developer ID signing + notarization. Unsign
   - downloads are merged/remuxed to `.mp4` when possible
   - stream sorting prefers H.264 video + AAC audio for broad playback support
 - MP4-compatible fallback selectors are tried before any low-quality fallback.
-- App can enable yt-dlp `fetch_pot` when a JS runtime is available (macOS bundles Deno; Linux/Windows bundle Node.js).
+- App can enable yt-dlp `fetch_pot` when a JS runtime is available and a PO-token provider plugin is installed (macOS bundles Deno; Linux/Windows bundle Node.js). Without a provider plugin, fetch_pot attempts are skipped.
+- App installs `curl-cffi` so yt-dlp can TLS-impersonate Chrome when the native extension loads.
 - UI provides cookie-source controls:
   - Global default (`Auto` or specific browser profile), persisted in localStorage
   - Per-download one-off override (`Use app default`, `Auto`, or specific source); resets after submit or cancel
@@ -93,6 +94,7 @@ For downloadable macOS releases, use Developer ID signing + notarization. Unsign
   - `YT_DLP_COOKIE_SOURCES_JSON='[...]'` — explicit ordered cookie sources (takes precedence when app selection is provided)
   - `YT_DLP_COOKIE_SELECTION_MODE=auto|manual` — explicit cookie selection mode (used with `YT_DLP_COOKIE_SOURCES_JSON`)
   - `YT_DLP_ENABLE_FETCH_POT=false` — disable fetch_pot attempts
+  - `YT_DLP_ENABLE_IMPERSONATE=false` — disable curl_cffi Chrome TLS impersonation
   - `YT_DLP_JS_RUNTIME_PATH=/absolute/path/to/runtime` (or `node`/`deno` on PATH) — override JS runtime binary
   - `YT_DLP_JS_RUNTIME_NAME=deno|node` — override runtime name used for fetch_pot
   - `YT_DLP_ALLOW_LOW_QUALITY_FALLBACK=true` — allow low progressive fallback when adaptive streams are blocked

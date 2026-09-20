@@ -30,12 +30,25 @@ fi
 echo "Syncing bundled Python dependencies from requirements.txt..."
 "$PYTHON" -m pip install -q -r "$REPO_DIR/python/requirements.txt"
 cp "$REPO_DIR/python/downloader.py" "$PYTHON_DIR/downloader.py"
+
+# pip wheels are adhoc-signed; python-build-standalone is Team-signed. Reconcile so
+# curl_cffi can dlopen after nightly sync (release builds use Developer ID instead).
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  while IFS= read -r candidate; do
+    if file -b "$candidate" | grep -q "Mach-O"; then
+      codesign --force --sign - "$candidate" >/dev/null 2>&1 || true
+    fi
+  done < <(find "$PYTHON_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print)
+fi
+
 echo "Bundled yt-dlp: $("$PYTHON" -m pip show yt-dlp | awk '/^Version:/{print $2}')"
+echo "Bundled curl_cffi: $("$PYTHON" -c 'import curl_cffi; print(curl_cffi.__version__)' 2>/dev/null || echo 'unavailable')"
 echo "Bundled JS runtime:"
 "$JS_RUNTIME" --version
 
 export RUN_REAL_WORLD_TESTS=1
-export YT_DLP_ENABLE_BROWSER_COOKIES=false
+# Match packaged app default: cookies on. Anonymous-only was over-flagging residential IPs.
+export YT_DLP_ENABLE_BROWSER_COOKIES=true
 export FFMPEG_PATH="$FFMPEG"
 export YT_DLP_JS_RUNTIME_PATH="$JS_RUNTIME"
 export YT_DLP_JS_RUNTIME_NAME=deno
@@ -103,7 +116,7 @@ gh issue create \
 
 Check \`$LOG_FILE\` for details.
 
-This likely means YouTube changed something and yt-dlp needs an update." \
+This likely means YouTube bot-checks or extractor breakage — check the log for \`Sign in to confirm\` vs other errors." \
   --label nightly-failure
 
 exit 1
