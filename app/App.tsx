@@ -721,10 +721,13 @@ export default function App() {
 		if (!youtubeAuth.fetchPotEnabled) {
 			return "fetch_pot is disabled by environment.";
 		}
-		if (youtubeAuth.jsRuntimeAvailable) {
-			return `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`;
+		if (!youtubeAuth.jsRuntimeAvailable) {
+			return "JS runtime not detected (fetch_pot disabled for this run).";
 		}
-		return "JS runtime not detected (fetch_pot disabled for this run).";
+		if (!youtubeAuth.poTokenProvidersAvailable) {
+			return `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (no PO-token provider; fetch_pot attempts skipped).`;
+		}
+		return `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`;
 	};
 
 	const selectedGlobalManualSourceMissing =

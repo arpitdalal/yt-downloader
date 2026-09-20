@@ -36,6 +36,7 @@ export interface YouTubeAuthStatus {
 	jsRuntimeAvailable: boolean;
 	jsRuntimeName: string | null;
 	fetchPotEnabled: boolean;
+	poTokenProvidersAvailable: boolean;
 }
 
 export interface CookieSource {

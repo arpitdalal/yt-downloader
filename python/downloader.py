@@ -3313,7 +3313,7 @@ def main():
         print(
             "Usage: python downloader.py <youtube_url> [download_from_start] [quality] "
             "[start_time] [end_time] [output_path] OR python downloader.py --validate <youtube_url> "
-            "OR python downloader.py --list-cookie-sources",
+            "OR python downloader.py --list-cookie-sources OR python downloader.py --auth-capabilities",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -3329,6 +3329,32 @@ def main():
             sys.stdout.write(json.dumps({"success": False, "error": message, "sources": []}))
             sys.stdout.flush()
             print(f"Failed to list cookie sources: {message}", file=sys.stderr)
+            sys.exit(1)
+
+    if sys.argv[1] == "--auth-capabilities":
+        try:
+            payload = {
+                "success": True,
+                "po_token_providers_available": YouTubeDownloader._po_token_providers_available(),
+                "impersonate_available": YouTubeDownloader._resolve_impersonate_target() is not None,
+            }
+            sys.stdout.write(json.dumps(payload))
+            sys.stdout.flush()
+            sys.exit(0)
+        except Exception as error:
+            message = YouTubeDownloader._truncate_error_message(str(error), limit=180)
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "success": False,
+                        "error": message,
+                        "po_token_providers_available": False,
+                        "impersonate_available": False,
+                    }
+                )
+            )
+            sys.stdout.flush()
+            print(f"Failed to report auth capabilities: {message}", file=sys.stderr)
             sys.exit(1)
 
     # Check if this is a validation request

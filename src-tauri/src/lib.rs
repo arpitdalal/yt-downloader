@@ -110,8 +110,10 @@ pub struct YouTubeAuthStatus {
     pub js_runtime_available: bool,
     /// JS runtime name used for fetch_pot (e.g. "deno", "node").
     pub js_runtime_name: Option<String>,
-    /// Whether fetch_pot integration is enabled.
+    /// Whether fetch_pot integration is enabled via environment.
     pub fetch_pot_enabled: bool,
+    /// True when a yt-dlp PO-token provider plugin is registered (required for fetch_pot attempts).
+    pub po_token_providers_available: bool,
 }
 
 #[allow(dead_code)]
@@ -326,7 +328,10 @@ fn get_log_info(app: AppHandle) -> Result<LogInfo, String> {
 
 #[tauri::command]
 fn get_youtube_auth_status(app: AppHandle) -> Result<YouTubeAuthStatus, String> {
-    Ok(detected_browser_auth_status(get_js_runtime_path(&app)))
+    Ok(detected_browser_auth_status(
+        get_js_runtime_path(&app),
+        probe_po_token_providers_available(&app),
+    ))
 }
 
 #[tauri::command]
@@ -911,7 +916,10 @@ fn detect_available_cookie_browser() -> Option<String> {
         .find(|browser| browser_cookie_store_exists(browser))
 }
 
-fn detected_browser_auth_status(js_runtime: Option<(PathBuf, String)>) -> YouTubeAuthStatus {
+fn detected_browser_auth_status(
+    js_runtime: Option<(PathBuf, String)>,
+    po_token_providers_available: bool,
+) -> YouTubeAuthStatus {
     let browser_cookies_enabled = env_truthy("YT_DLP_ENABLE_BROWSER_COOKIES", true);
     let detected_browser = detect_available_cookie_browser();
     let fetch_pot_enabled = env_truthy("YT_DLP_ENABLE_FETCH_POT", true);
@@ -921,7 +929,70 @@ fn detected_browser_auth_status(js_runtime: Option<(PathBuf, String)>) -> YouTub
         js_runtime_available: js_runtime.is_some(),
         js_runtime_name: js_runtime.map(|(_, name)| name),
         fetch_pot_enabled,
+        po_token_providers_available,
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct PythonAuthCapabilitiesResponse {
+    success: bool,
+    #[serde(default)]
+    po_token_providers_available: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn probe_po_token_providers_available(app: &AppHandle) -> bool {
+    match fetch_auth_capabilities_from_python(app) {
+        Ok(caps) => caps.po_token_providers_available,
+        Err(error) => {
+            warn!("Failed to probe PO-token providers: {error}");
+            false
+        }
+    }
+}
+
+fn fetch_auth_capabilities_from_python(
+    app: &AppHandle,
+) -> Result<PythonAuthCapabilitiesResponse, String> {
+    let python_path = get_python_path(app)?;
+    let script_path = get_python_script_path(app)?;
+    validate_python_path_for_mode(&python_path)?;
+
+    let args = vec![
+        script_path.to_string_lossy().to_string(),
+        "--auth-capabilities".to_string(),
+    ];
+    let python_dir = get_python_working_dir(&python_path);
+    let child = spawn_python_process(
+        "Failed to inspect auth capabilities",
+        &python_path,
+        &args,
+        python_dir.as_deref(),
+        &[],
+    )?;
+    let output = run_untracked_process(child)?;
+    if !output.status.success() {
+        let stderr = output.stderr.trim();
+        let message = if stderr.is_empty() {
+            format!("Process exited with code {}", output.status)
+        } else {
+            stderr.to_string()
+        };
+        return Err(message);
+    }
+
+    let value = parse_json_payload(&output.stdout)
+        .map_err(|error| format!("Failed to parse auth capabilities: {error}"))?;
+    let response: PythonAuthCapabilitiesResponse = serde_json::from_value(value)
+        .map_err(|error| format!("Failed to decode auth capabilities: {error}"))?;
+    if !response.success {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Failed to report auth capabilities".to_string()));
+    }
+    Ok(response)
 }
 
 fn is_youtube_auth_verification_error(message: &str) -> bool {
@@ -2140,13 +2211,15 @@ mod tests {
 
     #[test]
     fn detected_browser_auth_status_returns_runtime_status() {
-        let status = detected_browser_auth_status(Some((PathBuf::from("node"), "node".into())));
+        let status =
+            detected_browser_auth_status(Some((PathBuf::from("node"), "node".into())), false);
         assert!(status.js_runtime_available);
         assert_eq!(status.js_runtime_name.as_deref(), Some("node"));
         assert_eq!(
             status.fetch_pot_enabled,
             env_truthy("YT_DLP_ENABLE_FETCH_POT", true)
         );
+        assert!(!status.po_token_providers_available);
     }
 
     #[cfg(target_os = "macos")]
