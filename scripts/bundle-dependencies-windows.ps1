@@ -108,6 +108,14 @@ try {
     throw
 }
 & (Join-Path $jsRuntimeDir "node.exe") --version | Out-Null
+# `--version` only proves node starts. yt-dlp needs it to execute JS, so check
+# that too instead of finding out on a user's first download.
+$nodeExePath = Join-Path $jsRuntimeDir "node.exe"
+$probe = 'const add = (a, b) => a + b; if (add(20, 22) !== 42) { throw new Error("unexpected result"); } console.log("ytdl-jsruntime-ok");'
+$probeOutput = $probe | & $nodeExePath - 2>&1
+if ($LASTEXITCODE -ne 0 -or ($probeOutput -join "`n") -notmatch "ytdl-jsruntime-ok") {
+    throw "bundled node cannot execute JavaScript: $($probeOutput -join ' ')"
+}
 Write-Host "OK: JS runtime bundled at $jsRuntimeDir" -ForegroundColor Green
 
 Write-Host "`n=== Step 3: FFmpeg ===" -ForegroundColor Yellow

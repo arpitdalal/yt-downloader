@@ -277,6 +277,9 @@ export default function App() {
 				youtubeAuth?.fetchPotEnabled &&
 				youtubeAuth.jsRuntimeAvailable === false
 			) {
+				if (youtubeAuth.jsRuntimeError) {
+					return "YouTube requires sign-in for this video. The app's JavaScript runtime is broken, so YouTube's verification cannot be solved. Reinstall or update the app, or sign in to YouTube in your browser and try again.";
+				}
 				return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again. If it still fails, install/update the app runtime bundle (JS runtime missing).";
 			}
 			return "YouTube requires sign-in for this video. Sign in to YouTube in your browser and try again.";
@@ -721,13 +724,22 @@ export default function App() {
 		if (!youtubeAuth.fetchPotEnabled) {
 			return "fetch_pot is disabled by environment.";
 		}
+		const runtimeLabel = youtubeAuth.jsRuntimeName ?? "JS runtime";
 		if (!youtubeAuth.jsRuntimeAvailable) {
+			// Distinguish "not installed" from "installed but cannot run JS": the
+			// latter silently breaks every YouTube download.
+			if (youtubeAuth.jsRuntimeError) {
+				return `${runtimeLabel} cannot execute JavaScript, so YouTube's verification cannot be solved. Reinstall or update the app runtime bundle.`;
+			}
 			return "JS runtime not detected (fetch_pot disabled for this run).";
 		}
 		if (!youtubeAuth.poTokenProvidersAvailable) {
-			return `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (no PO-token provider; fetch_pot attempts skipped).`;
+			if (youtubeAuth.poTokenProvidersRegistered) {
+				return `JS runtime detected: ${runtimeLabel} (PO-token provider installed, but no generation backend configured; set YT_DLP_POT_PROVIDER_BASE_URL or YT_DLP_POT_PROVIDER_SERVER_HOME to enable fetch_pot).`;
+			}
+			return `JS runtime detected: ${runtimeLabel} (no PO-token provider; fetch_pot attempts skipped).`;
 		}
-		return `JS runtime detected: ${youtubeAuth.jsRuntimeName ?? "available"} (fetch_pot enabled).`;
+		return `JS runtime detected: ${runtimeLabel} (fetch_pot enabled).`;
 	};
 
 	const selectedGlobalManualSourceMissing =

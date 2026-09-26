@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -26,6 +27,16 @@ from downloader import (
     parse_section_times,
     parse_timestamp,
 )
+
+# Stands in for _po_token_provider_status() when a test needs the fetch_pot
+# ladder to be live without installing and configuring a real provider.
+_POT_PROVIDER_AVAILABLE = {
+    "registered": True,
+    "configured": True,
+    "available": True,
+    "names": ["BgUtilHTTP"],
+    "config_error": None,
+}
 
 # ============================================================================
 # Test Fixtures
@@ -988,7 +999,10 @@ class TestExtractVideoInfo:
     def test_extract_attempts_fetch_pot_when_provider_and_runtime_available(self, sample_video_info, temp_dir):
         attempted_opts = []
         runtime_path = temp_dir / "node"
-        runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runtime_path.write_text(
+            "#!/bin/sh\ncat >/dev/null\necho ytdl-jsruntime-ok\n",
+            encoding="utf-8",
+        )
         runtime_path.chmod(0o755)
 
         class MockYDL:
@@ -1010,7 +1024,11 @@ class TestExtractVideoInfo:
                 raise yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
 
         with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
-            with patch.object(YouTubeDownloader, "_po_token_providers_available", return_value=True):
+            with patch.object(
+                YouTubeDownloader,
+                "_po_token_provider_status",
+                return_value=_POT_PROVIDER_AVAILABLE,
+            ):
                 with patch.dict(
                     os.environ,
                     {
@@ -1033,10 +1051,115 @@ class TestExtractVideoInfo:
                     assert fetch_pot_attempts
                     assert all(opts.get("js_runtimes") for opts in attempted_opts)
 
-    def test_extract_skips_fetch_pot_without_provider_plugin(self, sample_video_info, temp_dir):
+    def test_fetch_pot_attempt_tells_provider_where_the_backend_lives(self, sample_video_info, temp_dir):
+        """A bundled app has no ~/bgutil-ytdlp-pot-provider, so the plugin is
+        told where the user's backend is instead of guessing."""
+        attempted_opts = []
+        runtime_path = temp_dir / "deno"
+        runtime_path.write_text(
+            "#!/bin/sh\ncat >/dev/null\necho ytdl-jsruntime-ok\n",
+            encoding="utf-8",
+        )
+        runtime_path.chmod(0o755)
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def extract_info(self, _url, download=False):
+                youtube_args = (self.opts.get("extractor_args") or {}).get("youtube") or {}
+                if "fetch_pot" in youtube_args:
+                    return sample_video_info
+                raise yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+
+        with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
+            with patch.object(
+                YouTubeDownloader,
+                "_po_token_provider_status",
+                return_value=_POT_PROVIDER_AVAILABLE,
+            ):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
+                        "YT_DLP_ENABLE_FETCH_POT": "true",
+                        "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
+                        "YT_DLP_JS_RUNTIME_NAME": "deno",
+                        "YT_DLP_POT_PROVIDER_BASE_URL": "http://127.0.0.1:4416",
+                        "YT_DLP_POT_PROVIDER_SERVER_HOME": "/opt/bgutil",
+                    },
+                    clear=True,
+                ):
+                    downloader = YouTubeDownloader()
+                    assert downloader.extract_video_info("https://youtube.com/watch?v=test") is not None
+
+        fetch_pot_attempts = [
+            (opts.get("extractor_args") or {})
+            for opts in attempted_opts
+            if "fetch_pot" in ((opts.get("extractor_args") or {}).get("youtube") or {})
+        ]
+        assert fetch_pot_attempts
+        args = fetch_pot_attempts[0]
+        assert args["youtubepot-bgutilhttp"] == ["base_url=http://127.0.0.1:4416"]
+        assert args["youtubepot-bgutilscript"] == ["server_home=/opt/bgutil"]
+
+    def test_unusable_runtime_is_not_handed_to_ytdlp(self, sample_video_info, temp_dir):
+        """A runtime that only starts is worse than none: yt-dlp probes it with
+        `--version`, selects it for every challenge, then fails each one. It must
+        be withheld, and fetch_pot must not be attempted against it."""
         attempted_opts = []
         runtime_path = temp_dir / "node"
         runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runtime_path.chmod(0o755)
+
+        class MockYDL:
+            def __init__(self, opts):
+                attempted_opts.append(opts)
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def extract_info(self, _url, download=False):
+                return sample_video_info
+
+        with patch("downloader.yt_dlp.YoutubeDL", side_effect=lambda opts: MockYDL(opts)):
+            with patch.object(YouTubeDownloader, "_po_token_provider_status", return_value=_POT_PROVIDER_AVAILABLE):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "YT_DLP_ENABLE_BROWSER_COOKIES": "false",
+                        "YT_DLP_ENABLE_FETCH_POT": "true",
+                        "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
+                        "YT_DLP_JS_RUNTIME_NAME": "node",
+                    },
+                    clear=True,
+                ):
+                    YouTubeDownloader().extract_video_info("https://youtube.com/watch?v=test")
+
+        assert attempted_opts
+        assert all(not opts.get("js_runtimes") for opts in attempted_opts)
+        assert all(
+            "fetch_pot" not in ((opts.get("extractor_args") or {}).get("youtube") or {}) for opts in attempted_opts
+        )
+
+    def test_extract_skips_fetch_pot_without_provider_plugin(self, sample_video_info, temp_dir):
+        attempted_opts = []
+        runtime_path = temp_dir / "node"
+        runtime_path.write_text(
+            "#!/bin/sh\ncat >/dev/null\necho ytdl-jsruntime-ok\n",
+            encoding="utf-8",
+        )
         runtime_path.chmod(0o755)
 
         class MockYDL:
@@ -1139,6 +1262,218 @@ class TestExtractVideoInfo:
                     "fetch_pot" not in ((opts.get("extractor_args") or {}).get("youtube") or {})
                     for opts in attempted_opts
                 )
+
+
+class TestPoTokenProviderStatus:
+    """Test _po_token_provider_status
+
+    The fetch_pot ladder used to be unreachable dead code: no provider plugin was
+    installed, and gating on plugin presence alone is not enough either, because
+    bgutil's HTTP provider reports itself available without probing. These tests
+    pin the three-way distinction that makes the ladder meaningful.
+    """
+
+    def _registry(self, registered: dict):
+        return patch(
+            "yt_dlp.extractor.youtube.pot._registry._pot_providers",
+        ), registered
+
+    def test_registered_but_unconfigured_is_not_available(self):
+        # Plugin installed, no backend: attempting fetch_pot would add doomed
+        # attempts and misleading warnings to every run.
+        with patch("yt_dlp.plugins.load_all_plugins"):
+            with patch.object(
+                YouTubeDownloader,
+                "_registered_pot_providers",
+                return_value={"BgUtilHTTP": object()},
+            ):
+                with patch.dict(os.environ, {}, clear=True):
+                    status = YouTubeDownloader._po_token_provider_status()
+                assert YouTubeDownloader._po_token_providers_available() is False
+        assert status["registered"] is True
+        assert status["configured"] is False
+        assert status["available"] is False
+
+    def test_registered_and_configured_is_available(self):
+        with patch.object(
+            YouTubeDownloader,
+            "_registered_pot_providers",
+            return_value={"BgUtilHTTP": object()},
+        ):
+            with patch.dict(
+                os.environ,
+                {"YT_DLP_POT_PROVIDER_BASE_URL": "http://127.0.0.1:4416"},
+                clear=True,
+            ):
+                status = YouTubeDownloader._po_token_provider_status()
+                assert YouTubeDownloader._po_token_providers_available() is True
+        assert status["registered"] is True
+        assert status["configured"] is True
+        assert status["available"] is True
+
+    def test_configured_without_plugin_is_not_available(self):
+        with patch.object(YouTubeDownloader, "_registered_pot_providers", return_value={}):
+            with patch.dict(
+                os.environ,
+                {"YT_DLP_POT_PROVIDER_SERVER_HOME": "/opt/bgutil"},
+                clear=True,
+            ):
+                status = YouTubeDownloader._po_token_provider_status()
+        assert status["configured"] is True
+        assert status["registered"] is False
+        assert status["available"] is False
+
+    def test_blank_env_values_do_not_count_as_configured(self):
+        with patch.object(
+            YouTubeDownloader,
+            "_registered_pot_providers",
+            return_value={"BgUtilHTTP": object()},
+        ):
+            with patch.dict(
+                os.environ,
+                {"YT_DLP_POT_PROVIDER_BASE_URL": "   ", "YT_DLP_POT_PROVIDER_SERVER_HOME": ""},
+                clear=True,
+            ):
+                status = YouTubeDownloader._po_token_provider_status()
+        assert status["configured"] is False
+        assert status["available"] is False
+
+    def test_repeated_probes_do_not_reload_plugins(self):
+        # load_all_plugins() is not idempotent; a second call re-runs plugin
+        # registration and prints a duplicate-registration traceback.
+        with patch("yt_dlp.plugins.load_all_plugins") as load:
+            with patch.object(
+                YouTubeDownloader,
+                "_registered_pot_providers",
+                return_value={"BgUtilHTTP": object()},
+            ):
+                with patch.dict(os.environ, {}, clear=True):
+                    YouTubeDownloader._po_token_provider_status()
+                    YouTubeDownloader._po_token_provider_status()
+        assert load.call_count == 0
+
+    def test_bundled_plugin_appears_in_requirements(self):
+        """The provider plugin must stay in requirements.txt; without it the
+        fetch_pot ladder can never light up, whatever the user configures."""
+        requirements = (Path(__file__).with_name("requirements.txt")).read_text(encoding="utf-8")
+        assert "bgutil-ytdlp-pot-provider==" in requirements
+
+
+# ============================================================================
+# JS Runtime Health Tests
+# ============================================================================
+
+
+class TestJsRuntimeHealth:
+    """Test _js_runtime_health
+
+    A JS runtime that only starts is not a JS runtime. On macOS a Deno re-signed
+    with the Hardened Runtime but without its JIT entitlements passes `--version`
+    and then dies on the first script, which yt-dlp reports to the user only as a
+    YouTube bot check. The probe has to catch that, not the file path.
+    """
+
+    def _runtime(self, temp_dir, body: str, name: str = "node") -> Path:
+        runtime_path = temp_dir / name
+        runtime_path.write_text(f"#!/bin/sh\ncat >/dev/null\n{body}\n", encoding="utf-8")
+        runtime_path.chmod(0o755)
+        return runtime_path
+
+    def _descriptor(self, runtime_path: Path, name: str = "node") -> dict:
+        return {
+            "name": name,
+            "path": str(runtime_path),
+            "js_runtimes": {name: {"path": str(runtime_path), "paths": [str(runtime_path)]}},
+        }
+
+    def test_reports_usable_when_runtime_executes_javascript(self, temp_dir):
+        runtime_path = self._runtime(temp_dir, "echo ytdl-jsruntime-ok")
+        health = YouTubeDownloader._js_runtime_health(self._descriptor(runtime_path))
+        assert health["configured"] is True
+        assert health["usable"] is True
+        assert health["name"] == "node"
+        assert health["error"] is None
+
+    def test_reports_unusable_when_runtime_starts_but_cannot_run_js(self, temp_dir):
+        # A runtime that exits 0 without executing anything is the failure mode
+        # that hid behind "js_runtimes: true" in the nightly logs.
+        runtime_path = self._runtime(temp_dir, "exit 0")
+        health = YouTubeDownloader._js_runtime_health(self._descriptor(runtime_path))
+        assert health["usable"] is False
+        assert health["error"]
+
+    def test_reports_unusable_when_runtime_crashes(self, temp_dir):
+        runtime_path = self._runtime(
+            temp_dir,
+            "echo 'Fatal process out of memory: Failed to reserve virtual memory for CodeRange' >&2\nexit 1",
+        )
+        health = YouTubeDownloader._js_runtime_health(self._descriptor(runtime_path))
+        assert health["usable"] is False
+        assert "CodeRange" in health["error"]
+
+    def test_reports_unusable_when_runtime_cannot_be_executed(self, temp_dir):
+        missing = temp_dir / "absent-runtime"
+        health = YouTubeDownloader._js_runtime_health(self._descriptor(missing))
+        assert health["configured"] is True
+        assert health["usable"] is False
+        assert health["error"]
+
+    def test_reports_unconfigured_when_no_runtime_is_set(self):
+        with patch.object(YouTubeDownloader, "_resolve_fetch_pot_runtime", return_value=None):
+            health = YouTubeDownloader._js_runtime_health()
+        assert health == {
+            "configured": False,
+            "usable": False,
+            "name": None,
+            "path": None,
+            "error": "not configured",
+        }
+
+    def test_uses_deno_argv_shape(self, temp_dir):
+        argv_log = temp_dir / "argv.txt"
+        runtime_path = self._runtime(temp_dir, f'echo "$@" >> "{argv_log}"\necho ytdl-jsruntime-ok', "deno")
+        health = YouTubeDownloader._js_runtime_health(self._descriptor(runtime_path, "deno"))
+        assert health["usable"] is True
+        argv = argv_log.read_text(encoding="utf-8")
+        assert "run --ext=js --no-code-cache --no-prompt --no-remote" in argv
+        assert argv.rstrip().endswith("-")
+
+    def test_probes_the_runtime_once_per_process(self, temp_dir):
+        # The probe is on the hot path for every extraction, so it must not
+        # re-spawn the runtime each time.
+        runtime_path = self._runtime(temp_dir, "echo ytdl-jsruntime-ok")
+        descriptor = self._descriptor(runtime_path)
+        YouTubeDownloader._js_runtime_health_cache.clear()
+
+        with patch.object(YouTubeDownloader, "_probe_js_runtime", wraps=YouTubeDownloader._probe_js_runtime) as probe:
+            first = YouTubeDownloader._js_runtime_health(descriptor)
+            second = YouTubeDownloader._js_runtime_health(descriptor)
+
+        assert first == second
+        assert probe.call_count == 1
+
+    def test_auth_capabilities_reports_runtime_health(self, temp_dir, capsys):
+        runtime_path = self._runtime(temp_dir, "exit 1", "deno")
+        script_path = Path(__file__).with_name("downloader.py")
+        with patch.dict(
+            os.environ,
+            {
+                "YT_DLP_JS_RUNTIME_PATH": str(runtime_path),
+                "YT_DLP_JS_RUNTIME_NAME": "deno",
+            },
+            clear=True,
+        ):
+            process = subprocess.run(
+                [sys.executable, str(script_path), "--auth-capabilities"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        assert process.returncode == 0
+        payload = json.loads(process.stdout)
+        assert payload["js_runtime_configured"] is True
+        assert payload["js_runtime_usable"] is False
+        assert payload["js_runtime_name"] == "deno"
 
 
 # ============================================================================
@@ -2460,7 +2795,10 @@ class TestDownloadVideo:
 
     def test_compose_ydl_opts_merges_extractor_args_without_clobbering(self, temp_dir):
         runtime_path = temp_dir / "node"
-        runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runtime_path.write_text(
+            "#!/bin/sh\ncat >/dev/null\necho ytdl-jsruntime-ok\n",
+            encoding="utf-8",
+        )
         runtime_path.chmod(0o755)
         runtime = {
             "name": "node",
@@ -2468,7 +2806,7 @@ class TestDownloadVideo:
             "js_runtimes": {"node": {"path": str(runtime_path), "paths": [str(runtime_path)]}},
         }
 
-        with patch.object(YouTubeDownloader, "_po_token_providers_available", return_value=True):
+        with patch.object(YouTubeDownloader, "_po_token_provider_status", return_value=_POT_PROVIDER_AVAILABLE):
             opts = YouTubeDownloader._compose_ydl_opts(
                 {"extractor_args": {"youtube": {"player_client": ["web"]}}},
                 fetch_pot_runtime=runtime,

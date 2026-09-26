@@ -7,6 +7,13 @@ RESOURCES_ROOT="src-tauri/resources"
 PYTHON_DIR="$RESOURCES_ROOT/python"
 FFMPEG_DIR="$RESOURCES_ROOT/ffmpeg"
 JSRUNTIME_DIR="$RESOURCES_ROOT/jsruntime"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+JS_RUNTIME_ENTITLEMENTS="$REPO_ROOT/src-tauri/entitlements.macos.plist"
+
+if [[ ! -f "$JS_RUNTIME_ENTITLEMENTS" ]]; then
+  echo "ERROR: missing JS runtime entitlements plist: $JS_RUNTIME_ENTITLEMENTS"
+  exit 1
+fi
 
 is_truthy() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -151,10 +158,14 @@ fi
 sign_macho_tree() {
   local identity="$1"
   local root="$2"
+  local entitlements="${3:-}"
   while IFS= read -r candidate; do
     if file -b "$candidate" | grep -q "Mach-O"; then
       if [[ "$identity" == "-" ]]; then
         codesign --force --sign - "$candidate"
+      elif [[ -n "$entitlements" ]]; then
+        codesign --force --sign "$identity" --timestamp --options runtime \
+          --entitlements "$entitlements" "$candidate"
       else
         codesign --force --sign "$identity" --timestamp --options runtime "$candidate"
       fi
@@ -166,7 +177,16 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
   echo "Signing bundled runtime binaries with identity: $SIGNING_IDENTITY"
   sign_macho_tree "$SIGNING_IDENTITY" "$PYTHON_DIR"
   sign_macho_tree "$SIGNING_IDENTITY" "$FFMPEG_DIR"
-  sign_macho_tree "$SIGNING_IDENTITY" "$JSRUNTIME_DIR"
+  # The JS runtime MUST get the JIT entitlements. Signed with --options runtime
+  # and no allow-jit, V8 cannot map its code range and the runtime executes
+  # nothing, which breaks every YouTube download.
+  #
+  # These entitlements are deliberately NOT set via `bundle > macOS > entitlements`:
+  # Tauri would apply them to the app and every Contents/MacOS binary. Tauri does
+  # not re-sign anything under Contents/Resources, so signing the runtime here
+  # scopes the JIT entitlements to the one binary that needs them.
+  # scripts/verify-release-macos.sh re-runs the smoke test on the shipped runtime.
+  sign_macho_tree "$SIGNING_IDENTITY" "$JSRUNTIME_DIR" "$JS_RUNTIME_ENTITLEMENTS"
   echo "OK: bundled runtime binaries signed"
 else
   if is_truthy "$REQUIRE_SIGNED_BUNDLED_RUNTIMES"; then
@@ -176,6 +196,11 @@ else
   echo "WARNING: no Developer ID identity found; adhoc-signing Python tree so curl_cffi can load"
   sign_macho_tree "-" "$PYTHON_DIR"
 fi
+
+printf '\n=== Step 5: JS runtime liveness ===\n'
+# `--version` proves the binary starts, not that it runs JS. Signing is the step
+# that breaks that, so verify it here rather than discovering it in the field.
+"$REPO_ROOT/scripts/jsruntime-smoke-test.sh" "$JSRUNTIME_DIR/deno" deno
 
 printf '\n=== Summary ===\n'
 if [[ -f "$PYTHON_DIR/bin/python3" && -f "$PYTHON_DIR/downloader.py" && -f "$FFMPEG_DIR/ffmpeg" && -f "$FFMPEG_DIR/ffprobe" && -f "$JSRUNTIME_DIR/deno" ]]; then

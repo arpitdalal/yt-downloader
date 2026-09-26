@@ -7,6 +7,7 @@ RESOURCES_ROOT="src-tauri/resources"
 PYTHON_DIR="$RESOURCES_ROOT/python"
 FFMPEG_DIR="$RESOURCES_ROOT/ffmpeg"
 JSRUNTIME_DIR="$RESOURCES_ROOT/jsruntime"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 printf '%s\n' "Bundling dependencies for Linux (Tauri resources)..."
 
@@ -101,6 +102,9 @@ chmod +x "$JSRUNTIME_DIR/node"
 rm -f node.tar.xz
 
 "$JSRUNTIME_DIR/node" --version >/dev/null 2>&1 || { echo "ERROR: bundled node binary does not execute"; exit 1; }
+# `--version` only proves node starts. yt-dlp needs it to execute JS, so check
+# that too instead of finding out on a user's first download.
+"$REPO_ROOT/scripts/jsruntime-smoke-test.sh" "$JSRUNTIME_DIR/node" node
 echo "OK: JS runtime bundled at $JSRUNTIME_DIR"
 
 printf '\n=== Step 3: FFmpeg ===\n'

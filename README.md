@@ -78,7 +78,11 @@ For downloadable macOS releases, use Developer ID signing + notarization. Unsign
   - downloads are merged/remuxed to `.mp4` when possible
   - stream sorting prefers H.264 video + AAC audio for broad playback support
 - MP4-compatible fallback selectors are tried before any low-quality fallback.
-- App can enable yt-dlp `fetch_pot` when a JS runtime is available and a PO-token provider plugin is installed (macOS bundles Deno; Linux/Windows bundle Node.js). Without a provider plugin, fetch_pot attempts are skipped.
+- App can enable yt-dlp `fetch_pot` when a JS runtime is available (macOS bundles Deno; Linux/Windows bundle Node.js) and a PO-token backend is configured.
+  - the provider *plugin* (`bgutil-ytdlp-pot-provider`, a 12KB pure-Python wheel) is bundled; the *generator* (bgutil's server or script) is ~700MB of Node modules and deliberately is not, so fetch_pot stays opt-in
+  - run a bgutil HTTP server (default `http://127.0.0.1:4416`), or clone its repo for script mode, then set `YT_DLP_POT_PROVIDER_BASE_URL` / `YT_DLP_POT_PROVIDER_SERVER_HOME`; the app forwards them to yt-dlp as `youtubepot-bgutilhttp` / `youtubepot-bgutilscript` args
+  - with no backend configured, fetch_pot attempts are skipped instead of attempted and doomed. The plugin reports itself available without probing, so `registered` / `configured` / `available` are tracked separately
+- The JS runtime is only useful if it can *execute* JavaScript, so every build and release step runs `scripts/jsruntime-smoke-test.sh`, which pipes a real program through the runtime the same way yt-dlp's EJS solver does. On macOS the runtime is signed with `src-tauri/entitlements.macos.plist` — without `com.apple.security.cs.allow-jit`, a Hardened-Runtime-signed Deno starts, passes `--version`, and then dies on the first script with `Failed to reserve virtual memory for CodeRange`, which yt-dlp surfaces only as `Sign in to confirm you're not a bot`.
 - App installs `curl-cffi` so yt-dlp can TLS-impersonate Chrome when the native extension loads.
 - UI provides cookie-source controls:
   - Global default (`Auto` or specific browser profile), persisted in localStorage
@@ -97,6 +101,8 @@ For downloadable macOS releases, use Developer ID signing + notarization. Unsign
   - `YT_DLP_ENABLE_IMPERSONATE=false` — disable curl_cffi Chrome TLS impersonation
   - `YT_DLP_JS_RUNTIME_PATH=/absolute/path/to/runtime` (or `node`/`deno` on PATH) — override JS runtime binary
   - `YT_DLP_JS_RUNTIME_NAME=deno|node` — override runtime name used for fetch_pot
+  - `YT_DLP_POT_PROVIDER_BASE_URL=http://127.0.0.1:4416` — PO-token generator HTTP server to use for fetch_pot
+  - `YT_DLP_POT_PROVIDER_SERVER_HOME=/path/to/bgutil-ytdlp-pot-provider` — PO-token generator checkout to use for fetch_pot (script mode)
   - `YT_DLP_ALLOW_LOW_QUALITY_FALLBACK=true` — allow low progressive fallback when adaptive streams are blocked
 
 ## Scripts

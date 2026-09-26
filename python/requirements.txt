@@ -2,5 +2,10 @@
 # Pin curl-cffi explicitly so resolution cannot fall back to vulnerable <0.15 releases.
 yt-dlp[default,curl-cffi]==2026.8.19
 curl-cffi>=0.15.0,<0.17
+# Registers yt-dlp's PO-token provider plugin. This is only the plugin half: the
+# token *generator* (bgutil's server/script) is ~700MB of Node modules and is not
+# bundled. Set YT_DLP_POT_PROVIDER_BASE_URL or YT_DLP_POT_PROVIDER_SERVER_HOME to
+# point at a backend you run yourself before fetch_pot is attempted.
+bgutil-ytdlp-pot-provider==2.0.0
 pytest>=9.1.1
 pytest-mock>=3.12.0

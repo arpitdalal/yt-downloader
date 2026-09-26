@@ -249,6 +249,9 @@ class DownloadProgressTracker:
 class YouTubeDownloader:
     """Main downloader class using yt-dlp"""
 
+    # Memoized _js_runtime_health() results, keyed by (runtime name, runtime path).
+    _js_runtime_health_cache: dict[tuple[object, object], dict] = {}
+
     def __init__(self, output_dir: str | None = None):
         if output_dir:
             self.output_dir = Path(output_dir)
@@ -413,17 +416,80 @@ class YouTubeDownloader:
             return None
 
     @classmethod
-    def _po_token_providers_available(cls) -> bool:
-        """True when a yt-dlp PO-token plugin is registered (fetch_pot needs one)."""
-        try:
-            from yt_dlp.extractor.youtube.pot._registry import _pot_providers
-            from yt_dlp.plugins import load_all_plugins
+    def _registered_pot_providers(cls) -> dict:
+        """Registered PO-token provider plugins, loading them once per process.
 
+        load_all_plugins() is not idempotent: a second call re-imports each plugin
+        and re-runs its @register_provider decorators, which trips yt-dlp's
+        duplicate-registration assert and prints a traceback. Guard exactly like
+        YoutubeDL does, so repeated status probes stay quiet.
+        """
+        from yt_dlp.extractor.youtube.pot._registry import _pot_providers
+        from yt_dlp.plugins import all_plugins_loaded, load_all_plugins
+
+        if not all_plugins_loaded.value:
             load_all_plugins()
-            providers = _pot_providers.value or {}
-            return bool(providers)
-        except Exception:
-            return False
+        return dict(_pot_providers.value or {})
+
+    @classmethod
+    def _po_token_provider_status(cls) -> dict:
+        """Describe whether fetch_pot can actually produce PO tokens.
+
+        Three separate facts, kept separate because conflating them is what made
+        the fetch_pot ladder dead code:
+
+        - `registered`: a PO-token provider plugin is installed. `bgutil` ships
+          as a 12KB pure-Python wheel, so this is true by default now.
+        - `configured`: the user pointed us at a running provider. The generation
+          backend (bgutil's server or script) is ~700MB of Node modules plus a
+          native `canvas` addon, far too heavy to bundle, so it stays opt-in.
+        - `available`: `registered and configured`, i.e. fetch_pot is worth
+          attempting. Note that bgutil's HTTP provider reports itself available
+          without probing, so `registered` alone must never gate the ladder —
+          that would add doomed attempts and misleading warnings to every run.
+        """
+        status = {
+            "registered": False,
+            "configured": False,
+            "available": False,
+            "names": [],
+            "config_error": None,
+        }
+        try:
+            providers = cls._registered_pot_providers()
+        except Exception as error:
+            status["config_error"] = cls._truncate_error_message(str(error), limit=180)
+            return status
+
+        status["registered"] = bool(providers)
+        status["names"] = sorted(str(name) for name in providers)
+        server_home, base_url = cls._pot_provider_locations()
+        status["configured"] = bool(server_home or base_url)
+        status["available"] = bool(providers) and status["configured"]
+        return status
+
+    @staticmethod
+    def _pot_provider_locations() -> tuple[str | None, str | None]:
+        """User-supplied PO-token provider locations, if any."""
+        server_home = os.environ.get("YT_DLP_POT_PROVIDER_SERVER_HOME", "").strip() or None
+        base_url = os.environ.get("YT_DLP_POT_PROVIDER_BASE_URL", "").strip() or None
+        return server_home, base_url
+
+    @classmethod
+    def _po_token_extractor_args(cls) -> dict | None:
+        """Extractor args that point the provider plugin at the user's backend."""
+        server_home, base_url = cls._pot_provider_locations()
+        args: dict[str, list[str]] = {}
+        if server_home:
+            args["youtubepot-bgutilscript"] = [f"server_home={server_home}"]
+        if base_url:
+            args["youtubepot-bgutilhttp"] = [f"base_url={base_url}"]
+        return args or None
+
+    @classmethod
+    def _po_token_providers_available(cls) -> bool:
+        """True when a fetch_pot attempt has a real chance of producing a token."""
+        return cls._po_token_provider_status()["available"]
 
     @staticmethod
     def _default_cookie_browser_candidates() -> list[str]:
@@ -1105,6 +1171,114 @@ class YouTubeDownloader:
             },
         }
 
+    @classmethod
+    def _js_runtime_health(cls, fetch_pot_runtime: dict | None = None) -> dict:
+        """Prove the JS runtime can execute JavaScript, not merely that it exists.
+
+        yt-dlp needs a JS runtime for YouTube's EJS challenges. A runtime can pass
+        `--version` and still be unable to run a single line of JS — on macOS a
+        Deno re-signed with the Hardened Runtime but without its JIT entitlements
+        starts fine and then dies with "Failed to reserve virtual memory for
+        CodeRange". The failure surfaces only as a YouTube bot check, so probe it
+        directly instead of inferring health from a file path.
+
+        The result is memoized per process: the bundled runtime does not change
+        while a download runs, and this is on the hot path for every extraction.
+        """
+        runtime = fetch_pot_runtime if fetch_pot_runtime is not None else cls._resolve_fetch_pot_runtime()
+        if not runtime:
+            return {"configured": False, "usable": False, "name": None, "path": None, "error": "not configured"}
+
+        cache_key = (runtime.get("name"), runtime.get("path"))
+        cached = cls._js_runtime_health_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        health = cls._probe_js_runtime(runtime)
+        cls._js_runtime_health_cache[cache_key] = health
+        return health
+
+    @classmethod
+    def _probe_js_runtime(cls, runtime: dict) -> dict:
+        name = runtime.get("name")
+        path = runtime.get("path")
+        if not isinstance(name, str) or not isinstance(path, str):
+            return {
+                "configured": False,
+                "usable": False,
+                "name": None,
+                "path": None,
+                "error": "invalid runtime descriptor",
+            }
+
+        if name == "deno":
+            command = [
+                path,
+                "run",
+                "--ext=js",
+                "--no-code-cache",
+                "--no-prompt",
+                "--no-remote",
+                "--no-lock",
+                "--node-modules-dir=none",
+                "--no-config",
+                "-",
+            ]
+        else:
+            command = [path, "-"]
+
+        # Mirrors the smoke test in scripts/jsruntime-smoke-test.sh.
+        probe = (
+            "const add = (a, b) => a + b;\n"
+            'if (add(20, 22) !== 42) { throw new Error("unexpected"); }\n'
+            'console.log("ytdl-jsruntime-ok");'
+        )
+        try:
+            completed = subprocess.run(
+                command,
+                input=probe,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "DENO_NO_PROMPT": "1", "DENO_NO_UPDATE_CHECK": "1"},
+            )
+        except (OSError, subprocess.SubprocessError) as probe_error:
+            return {
+                "configured": True,
+                "usable": False,
+                "name": name,
+                "path": path,
+                "error": cls._truncate_error_message(str(probe_error), limit=180),
+            }
+
+        usable = completed.returncode == 0 and "ytdl-jsruntime-ok" in (completed.stdout or "")
+        failure_reason = None
+        if not usable:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            failure_reason = cls._truncate_error_message(detail, limit=180) or f"exit status {completed.returncode}"
+        return {
+            "configured": True,
+            "usable": usable,
+            "name": name,
+            "path": path,
+            "error": failure_reason,
+        }
+
+    @classmethod
+    def _usable_fetch_pot_runtime(cls, runtime: dict | None) -> dict | None:
+        """The runtime only if it can actually execute JavaScript.
+
+        yt-dlp discovers a JS runtime with `--version`, which a runtime signed
+        under the macOS Hardened Runtime without its JIT entitlements passes even
+        though every script it runs dies. Handing that runtime to yt-dlp means it
+        is selected for each challenge and each PO token and then fails, which is
+        strictly worse than reporting no runtime at all. So the gate lives here,
+        the one place a runtime crosses into yt-dlp options.
+        """
+        if not runtime:
+            return None
+        return runtime if cls._js_runtime_health(runtime)["usable"] else None
+
     @staticmethod
     def _merge_extractor_args(*extractor_args_sets: dict | None) -> dict:
         merged: dict = {}
@@ -1137,10 +1311,14 @@ class YouTubeDownloader:
 
     @classmethod
     def _fetch_pot_extractor_args(cls) -> dict:
+        # Merge the provider-location args in so the plugin knows where the
+        # user's generation backend lives; without them it guesses at paths that
+        # do not exist in a bundled app.
         return {
             "youtube": {
                 "fetch_pot": ["auto"],
-            }
+            },
+            **(cls._po_token_extractor_args() or {}),
         }
 
     @classmethod
@@ -1159,6 +1337,11 @@ class YouTubeDownloader:
 
         if cookiesfrombrowser:
             ydl_opts["cookiesfrombrowser"] = cookiesfrombrowser
+
+        # Enforce the health rule here, not only at the call sites: this is the
+        # single place a runtime reaches yt-dlp, and yt-dlp cannot tell a runtime
+        # that only starts from one that works.
+        fetch_pot_runtime = cls._usable_fetch_pot_runtime(fetch_pot_runtime)
 
         merged_extractor_args = cls._merge_extractor_args(
             ydl_opts.get("extractor_args"),
@@ -1477,10 +1660,23 @@ class YouTubeDownloader:
             default=False,
         )
         fetch_pot_runtime = self._resolve_fetch_pot_runtime()
-        pot_providers_available = self._po_token_providers_available()
+        pot_provider_status = self._po_token_provider_status()
+        pot_providers_available = pot_provider_status["available"]
+        js_runtime_health = self._js_runtime_health(fetch_pot_runtime)
+        if fetch_pot_runtime and not js_runtime_health["usable"]:
+            print(
+                "Bundled JS runtime cannot execute JavaScript; YouTube challenges will fail. "
+                f"runtime={js_runtime_health.get('path')}: {js_runtime_health.get('error')}",
+                file=sys.stderr,
+            )
+        # A runtime that cannot execute JS is worse than none: yt-dlp probes it
+        # with `--version`, sees it as available, selects it for every challenge,
+        # and then fails each one. Drop it so yt-dlp reports the runtime as
+        # missing and fetch_pot is not attempted against a dead script engine.
+        effective_fetch_pot_runtime = self._usable_fetch_pot_runtime(fetch_pot_runtime)
         # Bundled JS runtime must apply to every attempt, not only fetch_pot.
-        if fetch_pot_runtime and isinstance(fetch_pot_runtime.get("js_runtimes"), dict):
-            base_opts["js_runtimes"] = fetch_pot_runtime["js_runtimes"]
+        if effective_fetch_pot_runtime and isinstance(effective_fetch_pot_runtime.get("js_runtimes"), dict):
+            base_opts["js_runtimes"] = effective_fetch_pot_runtime["js_runtimes"]
 
         if cookie_source_error and self._cookie_selection_mode_from_env() == "manual":
             self._last_extract_error = cookie_source_error
@@ -1500,15 +1696,16 @@ class YouTubeDownloader:
                         self._compose_ydl_opts(base_opts, cookiesfrombrowser=cookiesfrombrowser),
                     )
                 )
-        # fetch_pot:auto is a no-op without a PO-token provider plugin.
-        if fetch_pot_runtime and pot_providers_available:
+        # fetch_pot:auto is a no-op without a PO-token provider plugin, and the
+        # provider needs a live runtime to mint tokens with.
+        if effective_fetch_pot_runtime and pot_providers_available:
             attempts.append(
                 (
                     "fetch_pot",
-                    self._compose_ydl_opts(base_opts, fetch_pot_runtime=fetch_pot_runtime),
+                    self._compose_ydl_opts(base_opts, fetch_pot_runtime=effective_fetch_pot_runtime),
                 )
             )
-        if fetch_pot_runtime and pot_providers_available:
+        if effective_fetch_pot_runtime and pot_providers_available:
             for source in cookie_sources:
                 cookiesfrombrowser = source.get("cookiesfrombrowser")
                 browser_name = str(source.get("browser") or "browser")
@@ -1520,7 +1717,7 @@ class YouTubeDownloader:
                             self._compose_ydl_opts(
                                 base_opts,
                                 cookiesfrombrowser=cookiesfrombrowser,
-                                fetch_pot_runtime=fetch_pot_runtime,
+                                fetch_pot_runtime=effective_fetch_pot_runtime,
                             ),
                         )
                     )
@@ -1555,9 +1752,16 @@ class YouTubeDownloader:
                 "cookie_source_error": cookie_source_error,
                 "fetch_pot_enabled": self._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True),
                 "fetch_pot_runtime_available": bool(fetch_pot_runtime),
+                "fetch_pot_runtime_usable": bool(effective_fetch_pot_runtime),
                 "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
                 "fetch_pot_runtime_path": fetch_pot_runtime.get("path") if fetch_pot_runtime else None,
                 "po_token_providers_available": pot_providers_available,
+                "po_token_providers_registered": pot_provider_status["registered"],
+                "po_token_providers_configured": pot_provider_status["configured"],
+                "po_token_provider_names": pot_provider_status["names"],
+                "js_runtime_configured": js_runtime_health["configured"],
+                "js_runtime_usable": js_runtime_health["usable"],
+                "js_runtime_error": js_runtime_health["error"],
                 "impersonate": bool(self._resolve_impersonate_target()),
             },
         )
@@ -2629,7 +2833,19 @@ class YouTubeDownloader:
         )
         fetch_pot_enabled = self._is_truthy_env("YT_DLP_ENABLE_FETCH_POT", default=True)
         fetch_pot_runtime = self._resolve_fetch_pot_runtime()
-        pot_providers_available = self._po_token_providers_available()
+        pot_provider_status = self._po_token_provider_status()
+        pot_providers_available = pot_provider_status["available"]
+        js_runtime_health = self._js_runtime_health(fetch_pot_runtime)
+        if fetch_pot_runtime and not js_runtime_health["usable"]:
+            print(
+                "Bundled JS runtime cannot execute JavaScript; YouTube challenges will fail. "
+                f"runtime={js_runtime_health.get('path')}: {js_runtime_health.get('error')}",
+                file=sys.stderr,
+            )
+        # See extract_video_info: a runtime that cannot execute JS is worse than
+        # none, because yt-dlp probes it with `--version`, picks it for every
+        # challenge, and then fails each one.
+        effective_fetch_pot_runtime = self._usable_fetch_pot_runtime(fetch_pot_runtime)
         ffmpeg_location_for_ytdlp = self._resolve_ffmpeg_location_for_ytdlp()
         self._emit_debug_event(
             "quality_debug",
@@ -2645,9 +2861,16 @@ class YouTubeDownloader:
                 "cookie_source_error": cookie_source_error,
                 "fetch_pot_enabled": fetch_pot_enabled,
                 "fetch_pot_runtime_available": bool(fetch_pot_runtime),
+                "fetch_pot_runtime_usable": bool(effective_fetch_pot_runtime),
                 "fetch_pot_runtime_name": fetch_pot_runtime.get("name") if fetch_pot_runtime else None,
                 "fetch_pot_runtime_path": fetch_pot_runtime.get("path") if fetch_pot_runtime else None,
                 "po_token_providers_available": pot_providers_available,
+                "po_token_providers_registered": pot_provider_status["registered"],
+                "po_token_providers_configured": pot_provider_status["configured"],
+                "po_token_provider_names": pot_provider_status["names"],
+                "js_runtime_configured": js_runtime_health["configured"],
+                "js_runtime_usable": js_runtime_health["usable"],
+                "js_runtime_error": js_runtime_health["error"],
                 "impersonate": bool(self._resolve_impersonate_target()),
                 "ffmpeg_location_for_ytdlp": ffmpeg_location_for_ytdlp,
             },
@@ -2744,7 +2967,7 @@ class YouTubeDownloader:
                         "cookie_source_id": source_id,
                     }
                 )
-            if fetch_pot_enabled and fetch_pot_runtime and pot_providers_available:
+            if fetch_pot_enabled and effective_fetch_pot_runtime and pot_providers_available:
                 attempt_profiles.append(
                     {
                         "name": "hq_best_fetch_pot",
@@ -2754,7 +2977,7 @@ class YouTubeDownloader:
                         "extractor_args": None,
                     }
                 )
-            if fetch_pot_enabled and fetch_pot_runtime and pot_providers_available:
+            if fetch_pot_enabled and effective_fetch_pot_runtime and pot_providers_available:
                 for cookie_source in cookie_sources:
                     source_id = str(cookie_source.get("id") or cookie_source.get("browser") or "source")
                     cookiesfrombrowser = cookie_source.get("cookiesfrombrowser")
@@ -2863,10 +3086,10 @@ class YouTubeDownloader:
                         base_opts["nocheckcertificate"] = True
 
                     # Bundled JS runtime on every attempt; fetch_pot args only when profile asks.
-                    if fetch_pot_runtime and isinstance(fetch_pot_runtime.get("js_runtimes"), dict):
-                        base_opts["js_runtimes"] = fetch_pot_runtime["js_runtimes"]
+                    if effective_fetch_pot_runtime and isinstance(effective_fetch_pot_runtime.get("js_runtimes"), dict):
+                        base_opts["js_runtimes"] = effective_fetch_pot_runtime["js_runtimes"]
 
-                    fetch_pot_runtime_for_attempt = fetch_pot_runtime if profile_fetch_pot else None
+                    fetch_pot_runtime_for_attempt = effective_fetch_pot_runtime if profile_fetch_pot else None
                     composed_base_opts = self._compose_ydl_opts(
                         base_opts,
                         cookiesfrombrowser=profile_cookies if isinstance(profile_cookies, tuple) else None,
@@ -3333,10 +3556,19 @@ def main():
 
     if sys.argv[1] == "--auth-capabilities":
         try:
+            js_runtime_health = YouTubeDownloader._js_runtime_health()
+            pot_provider_status = YouTubeDownloader._po_token_provider_status()
             payload = {
                 "success": True,
-                "po_token_providers_available": YouTubeDownloader._po_token_providers_available(),
+                "po_token_providers_available": pot_provider_status["available"],
+                "po_token_providers_registered": pot_provider_status["registered"],
+                "po_token_providers_configured": pot_provider_status["configured"],
+                "po_token_provider_names": pot_provider_status["names"],
                 "impersonate_available": YouTubeDownloader._resolve_impersonate_target() is not None,
+                "js_runtime_configured": js_runtime_health["configured"],
+                "js_runtime_usable": js_runtime_health["usable"],
+                "js_runtime_name": js_runtime_health["name"],
+                "js_runtime_error": js_runtime_health["error"],
             }
             sys.stdout.write(json.dumps(payload))
             sys.stdout.flush()
@@ -3349,7 +3581,14 @@ def main():
                         "success": False,
                         "error": message,
                         "po_token_providers_available": False,
+                        "po_token_providers_registered": False,
+                        "po_token_providers_configured": False,
+                        "po_token_provider_names": [],
                         "impersonate_available": False,
+                        "js_runtime_configured": False,
+                        "js_runtime_usable": False,
+                        "js_runtime_name": None,
+                        "js_runtime_error": message,
                     }
                 )
             )

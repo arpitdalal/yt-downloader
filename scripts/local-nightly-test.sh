@@ -26,6 +26,15 @@ if [ ! -x "$PYTHON" ] || ! "$PYTHON" --version >/dev/null 2>&1 || \
   ./scripts/bundle-dependencies-macos.sh
 fi
 
+# `--version` passes on a Deno that cannot execute JS (e.g. re-signed without its
+# JIT entitlements), and yt-dlp's YouTube extractor then fails every download
+# with a bot check. Prove the runtime actually runs code before testing with it.
+if ! ./scripts/jsruntime-smoke-test.sh "$JS_RUNTIME" deno; then
+  echo "Bundled JS runtime cannot execute JavaScript, rebuilding runtimes..."
+  ./scripts/bundle-dependencies-macos.sh
+  ./scripts/jsruntime-smoke-test.sh "$JS_RUNTIME" deno
+fi
+
 # Keep bundled yt-dlp/pytest aligned with requirements.txt (avoids stale runtime)
 echo "Syncing bundled Python dependencies from requirements.txt..."
 "$PYTHON" -m pip install -q -r "$REPO_DIR/python/requirements.txt"

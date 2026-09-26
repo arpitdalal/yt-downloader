@@ -44,7 +44,7 @@ struct CookieSourceCache {
 
 #[derive(Debug, Clone)]
 struct AuthCapabilitiesCache {
-    po_token_providers_available: bool,
+    capabilities: PythonAuthCapabilitiesResponse,
     fetched_at: Instant,
 }
 
@@ -120,9 +120,15 @@ pub struct YouTubeAuthStatus {
     pub js_runtime_available: bool,
     /// JS runtime name used for fetch_pot (e.g. "deno", "node").
     pub js_runtime_name: Option<String>,
+    /// Why the JS runtime is unusable, when it was found but cannot run JS.
+    /// yt-dlp needs it for YouTube's challenges, so a runtime that only starts
+    /// (e.g. macOS Hardened Runtime without its JIT entitlements) breaks downloads.
+    pub js_runtime_error: Option<String>,
     /// Whether fetch_pot integration is enabled via environment.
     pub fetch_pot_enabled: bool,
-    /// True when a yt-dlp PO-token provider plugin is registered (required for fetch_pot attempts).
+    /// True when a yt-dlp PO-token provider plugin is registered.
+    pub po_token_providers_registered: bool,
+    /// True when a PO-token provider backend is configured (fetch_pot attempts run).
     pub po_token_providers_available: bool,
 }
 
@@ -343,9 +349,10 @@ async fn get_youtube_auth_status(
 ) -> Result<YouTubeAuthStatus, String> {
     let shared_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let capabilities = probe_auth_capabilities(&app, &shared_state);
         Ok(detected_browser_auth_status(
             get_js_runtime_path(&app),
-            probe_po_token_providers_available(&app, &shared_state),
+            &capabilities,
         ))
     })
     .await
@@ -725,6 +732,20 @@ fn yt_dlp_env_overrides(
         ));
         env_overrides.push(("YT_DLP_JS_RUNTIME_NAME", runtime_name));
     }
+
+    // PO-token provider backend locations are inherited from the user's
+    // environment. Without them the provider plugin has nowhere to look and
+    // fetch_pot is skipped, so forward them when present.
+    for name in [
+        "YT_DLP_POT_PROVIDER_BASE_URL",
+        "YT_DLP_POT_PROVIDER_SERVER_HOME",
+    ] {
+        if let Ok(value) = env::var(name) {
+            if !value.trim().is_empty() {
+                env_overrides.push((name, value));
+            }
+        }
+    }
     Ok(env_overrides)
 }
 
@@ -936,55 +957,82 @@ fn detect_available_cookie_browser() -> Option<String> {
 
 fn detected_browser_auth_status(
     js_runtime: Option<(PathBuf, String)>,
-    po_token_providers_available: bool,
+    capabilities: &PythonAuthCapabilitiesResponse,
 ) -> YouTubeAuthStatus {
     let browser_cookies_enabled = env_truthy("YT_DLP_ENABLE_BROWSER_COOKIES", true);
     let detected_browser = detect_available_cookie_browser();
     let fetch_pot_enabled = env_truthy("YT_DLP_ENABLE_FETCH_POT", true);
+    // A JS runtime that only starts is not a JS runtime: yt-dlp needs it to
+    // execute YouTube's challenges. Trust the Python probe, and fall back to
+    // path detection when the probe could not run.
+    let probe_ran = capabilities.success;
+    let js_runtime_available = js_runtime.is_some()
+        && (!probe_ran || (capabilities.js_runtime_configured && capabilities.js_runtime_usable));
     YouTubeAuthStatus {
         connected: browser_cookies_enabled && detected_browser.is_some(),
         detected_browser,
-        js_runtime_available: js_runtime.is_some(),
+        js_runtime_available,
         js_runtime_name: js_runtime.map(|(_, name)| name),
+        js_runtime_error: if js_runtime_available || !probe_ran {
+            None
+        } else {
+            capabilities.js_runtime_error.clone()
+        },
         fetch_pot_enabled,
-        po_token_providers_available,
+        po_token_providers_registered: capabilities.po_token_providers_registered,
+        po_token_providers_available: capabilities.po_token_providers_available,
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct PythonAuthCapabilitiesResponse {
     success: bool,
     #[serde(default)]
     po_token_providers_available: bool,
     #[serde(default)]
+    po_token_providers_registered: bool,
+    #[serde(default)]
+    js_runtime_configured: bool,
+    #[serde(default)]
+    js_runtime_usable: bool,
+    #[serde(default)]
+    js_runtime_error: Option<String>,
+    #[serde(default)]
     error: Option<String>,
 }
 
-fn probe_po_token_providers_available(app: &AppHandle, state: &SharedDownloadState) -> bool {
+fn unknown_auth_capabilities() -> PythonAuthCapabilitiesResponse {
+    PythonAuthCapabilitiesResponse::default()
+}
+
+fn probe_auth_capabilities(
+    app: &AppHandle,
+    state: &SharedDownloadState,
+) -> PythonAuthCapabilitiesResponse {
     if let Ok(guard) = state.auth_capabilities_cache.lock() {
         if let Some(cache) = guard.as_ref() {
             if cache.fetched_at.elapsed() < AUTH_CAPABILITIES_CACHE_TTL {
-                return cache.po_token_providers_available;
+                return cache.capabilities.clone();
             }
         }
     }
 
-    let available = match fetch_auth_capabilities_from_python(app) {
-        Ok(caps) => caps.po_token_providers_available,
+    let capabilities = match fetch_auth_capabilities_from_python(app) {
+        Ok(caps) => caps,
         Err(error) => {
-            warn!("Failed to probe PO-token providers: {error}");
-            false
+            warn!("Failed to probe auth capabilities: {error}");
+            unknown_auth_capabilities()
         }
     };
 
     if let Ok(mut guard) = state.auth_capabilities_cache.lock() {
         *guard = Some(AuthCapabilitiesCache {
-            po_token_providers_available: available,
+            capabilities: capabilities.clone(),
             fetched_at: Instant::now(),
         });
     }
-    available
+    capabilities
 }
 
 fn fetch_auth_capabilities_from_python(
@@ -999,12 +1047,16 @@ fn fetch_auth_capabilities_from_python(
         "--auth-capabilities".to_string(),
     ];
     let python_dir = get_python_working_dir(&python_path);
+    // The probe resolves the JS runtime and PO-token provider from the
+    // environment, so it needs the same overrides the download process gets.
+    // Without them it would report a perfectly healthy runtime as unconfigured.
+    let env_overrides = yt_dlp_env_overrides(app, None, None, None)?;
     let child = spawn_python_process(
         "Failed to inspect auth capabilities",
         &python_path,
         &args,
         python_dir.as_deref(),
-        &[],
+        &env_overrides,
     )?;
     let output = run_untracked_process(child)?;
     if !output.status.success() {
@@ -2245,14 +2297,65 @@ mod tests {
 
     #[test]
     fn detected_browser_auth_status_returns_runtime_status() {
-        let status =
-            detected_browser_auth_status(Some((PathBuf::from("node"), "node".into())), false);
+        let capabilities = PythonAuthCapabilitiesResponse {
+            success: true,
+            po_token_providers_available: false,
+            po_token_providers_registered: true,
+            js_runtime_configured: true,
+            js_runtime_usable: true,
+            js_runtime_error: None,
+            error: None,
+        };
+        let status = detected_browser_auth_status(
+            Some((PathBuf::from("node"), "node".into())),
+            &capabilities,
+        );
         assert!(status.js_runtime_available);
         assert_eq!(status.js_runtime_name.as_deref(), Some("node"));
+        assert!(status.js_runtime_error.is_none());
         assert_eq!(
             status.fetch_pot_enabled,
             env_truthy("YT_DLP_ENABLE_FETCH_POT", true)
         );
+        assert!(!status.po_token_providers_available);
+    }
+
+    #[test]
+    fn detected_browser_auth_status_reports_unusable_runtime() {
+        // The runtime exists and starts, but cannot execute JavaScript. Reporting
+        // it as available is what hid a broken macOS signature for three releases.
+        let capabilities = PythonAuthCapabilitiesResponse {
+            success: true,
+            po_token_providers_available: false,
+            po_token_providers_registered: true,
+            js_runtime_configured: true,
+            js_runtime_usable: false,
+            js_runtime_error: Some("Failed to reserve virtual memory for CodeRange".into()),
+            error: None,
+        };
+        let status = detected_browser_auth_status(
+            Some((PathBuf::from("deno"), "deno".into())),
+            &capabilities,
+        );
+        assert!(!status.js_runtime_available);
+        assert_eq!(status.js_runtime_name.as_deref(), Some("deno"));
+        assert!(status
+            .js_runtime_error
+            .as_deref()
+            .is_some_and(|error| error.contains("CodeRange")));
+    }
+
+    #[test]
+    fn detected_browser_auth_status_falls_back_to_path_detection() {
+        // Probe could not run: do not claim the runtime is broken, and do not
+        // claim PO-token providers either.
+        let capabilities = unknown_auth_capabilities();
+        let status = detected_browser_auth_status(
+            Some((PathBuf::from("deno"), "deno".into())),
+            &capabilities,
+        );
+        assert!(status.js_runtime_available);
+        assert!(status.js_runtime_error.is_none());
         assert!(!status.po_token_providers_available);
     }
 

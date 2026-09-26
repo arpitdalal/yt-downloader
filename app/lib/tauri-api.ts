@@ -35,7 +35,9 @@ export interface YouTubeAuthStatus {
 	detectedBrowser: string | null;
 	jsRuntimeAvailable: boolean;
 	jsRuntimeName: string | null;
+	jsRuntimeError?: string | null;
 	fetchPotEnabled: boolean;
+	poTokenProvidersRegistered: boolean;
 	poTokenProvidersAvailable: boolean;
 }
 
