@@ -34,7 +34,6 @@ VIDEO_EXTENSIONS = ["mp4", "webm", "mkv", "m4a", "flv", "avi", "mov"]
 CACHE_KEY_VERSION = "hqv4"
 MAX_COOKIE_SOURCE_ATTEMPTS = 6
 PLAYER_CLIENTS = [
-    "tv_embedded",
     "web_embedded",
     "mweb",
     "web_safari",
@@ -2860,7 +2859,7 @@ class YouTubeDownloader:
         cached_video_path = self._get_cached_video_path(cache_video_id)
         original_file_path: Path | None = None
         use_cached_file = False
-
+        low_quality_fallback: dict | None = None
         if cached_video_path:
             cached_candidate = Path(cached_video_path)
             if not cached_candidate.exists() or not self._is_valid_video_file(cached_candidate):
@@ -2983,6 +2982,8 @@ class YouTubeDownloader:
 
             last_error = None
             download_succeeded = False
+            low_quality_fallback = None
+            had_successful_download = False
 
             # Check if SSL certificate verification should be disabled
             skip_cert_check = os.environ.get("YT_DLP_SKIP_CERT_CHECK", "false").lower() == "true"
@@ -3072,6 +3073,7 @@ class YouTubeDownloader:
                             download_succeeded = True
                             successful_profile_name = profile.get("name")
                             successful_selector = format_selector
+                            had_successful_download = True
                             break
                     except yt_dlp.utils.DownloadError as e:
                         last_error = e
@@ -3127,10 +3129,28 @@ class YouTubeDownloader:
                         continue
 
                 if download_succeeded:
-                    break
+                    sf = progress_tracker.selected_format or {}
+                    sf_height = sf.get("video_height") or sf.get("height")
+                    sf_is_progressive = sf.get("video_height") is None
+                    pcp = {f"hq_{c}" for c in PLAYER_CLIENTS}
+                    if (
+                        successful_profile_name in pcp
+                        and sf_is_progressive
+                        and isinstance(sf_height, int)
+                        and isinstance(format_caps.get("max_adaptive_height"), int)
+                        and format_caps["max_adaptive_height"] >= 720
+                        and sf_height < format_caps["max_adaptive_height"]
+                        and not allow_low_quality
+                    ):
+                        low_quality_fallback = {
+                            "selected_height": sf_height,
+                            "max_adaptive_height": format_caps["max_adaptive_height"],
+                        }
+                    else:
+                        break
 
             # Check if download succeeded
-            if last_error and not original_file_path:
+            if last_error and not original_file_path and not had_successful_download:
                 # All format selectors failed
                 manual_cookie_errors = [
                     f"{name}: {message}"
@@ -3204,20 +3224,7 @@ class YouTubeDownloader:
                 video_info=video_info,
             )
 
-        selected_format = progress_tracker.selected_format or {}
-        selected_height = selected_format.get("video_height") or selected_format.get("height")
-        is_progressive = selected_format.get("video_height") is None
-        max_adaptive_height = format_caps.get("max_adaptive_height")
-        player_client_profiles = {f"hq_{client}" for client in PLAYER_CLIENTS}
-        if (
-            successful_profile_name in player_client_profiles
-            and is_progressive
-            and isinstance(selected_height, int)
-            and isinstance(max_adaptive_height, int)
-            and max_adaptive_height >= 720
-            and selected_height < max_adaptive_height
-            and not allow_low_quality
-        ):
+        if low_quality_fallback:
             try:
                 if original_file_path and original_file_path.exists():
                     original_file_path.unlink()
@@ -3231,8 +3238,9 @@ class YouTubeDownloader:
                 file_path=None,
                 file_size=None,
                 error_message=(
-                    f"High-quality stream is available up to {max_adaptive_height}p, "
-                    f"but YouTube blocked adaptive download and only {selected_height}p progressive succeeded. "
+                    f"High-quality stream is available up to {low_quality_fallback['max_adaptive_height']}p, "
+                    f"but YouTube blocked adaptive download and only "
+                    f"{low_quality_fallback['selected_height']}p progressive succeeded. "
                     + (
                         (
                             (
