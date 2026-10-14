@@ -20,6 +20,7 @@ import yt_dlp
 # Import the module under test
 from downloader import (
     CACHE_KEY_VERSION,
+    PLAYER_CLIENTS,
     DownloadProgressTracker,
     DownloadResult,
     VideoInfo,
@@ -1195,7 +1196,7 @@ class TestExtractVideoInfo:
                         for opts in attempted_opts
                     )
 
-    def test_extract_skips_anonymous_clients_after_bot_check(self, sample_video_info):
+    def test_extract_tries_all_player_clients_despite_bot_check(self, sample_video_info):
         attempted_names: list[str] = []
 
         class MockYDL:
@@ -1224,8 +1225,7 @@ class TestExtractVideoInfo:
                     downloader = YouTubeDownloader()
                     result = downloader.extract_video_info("https://youtube.com/watch?v=test")
                     assert result is None
-                    # default bot-check → still try android_vr once → skip android
-                    assert attempted_names == ["default", "android_vr"]
+                    assert attempted_names == ["default"] + PLAYER_CLIENTS
 
     def test_extract_skips_fetch_pot_when_runtime_is_unavailable(self, sample_video_info):
         attempted_opts = []
@@ -3156,8 +3156,8 @@ class TestDownloadVideo:
                         default_selector = YouTubeDownloader._build_format_selectors("bestvideo*+bestaudio")[0]
                         assert attempted_non_empty == [default_selector]
 
-    def test_download_falls_back_to_restricted_progressive_on_403(self, temp_dir, sample_video_info):
-        """When HQ streams are blocked (403), fallback profile should download progressive format."""
+    def test_download_falls_back_to_player_client_on_403(self, temp_dir, sample_video_info):
+        """When HQ streams are blocked (403), fallback player client should download progressive format."""
         output_file = temp_dir / "output.mp4"
         downloaded_file = temp_dir / f"{sample_video_info['id']}_{CACHE_KEY_VERSION}.mp4"
         downloaded_file.write_bytes(b"video data")
@@ -3181,10 +3181,7 @@ class TestDownloadVideo:
 
             def download(self, _urls):
                 extractor_args = self.opts.get("extractor_args") or {}
-                if extractor_args.get("youtube", {}).get("player_client") == [
-                    "web",
-                    "android",
-                ]:
+                if extractor_args.get("youtube", {}).get("player_client") == [PLAYER_CLIENTS[0]]:
                     return None
                 raise yt_dlp.utils.DownloadError("HTTP Error 403: Forbidden")
 
@@ -3234,14 +3231,7 @@ class TestDownloadVideo:
                                             assert any(a["extractor_args"] is None for a in attempts)
                                             assert any(
                                                 a["extractor_args"]
-                                                == {
-                                                    "youtube": {
-                                                        "player_client": [
-                                                            "web",
-                                                            "android",
-                                                        ]
-                                                    }
-                                                }
+                                                == {"youtube": {"player_client": [PLAYER_CLIENTS[0]]}}
                                                 for a in attempts
                                             )
 
@@ -3312,10 +3302,7 @@ class TestDownloadVideo:
 
             def download(self, _urls):
                 extractor_args = self.opts.get("extractor_args") or {}
-                if extractor_args.get("youtube", {}).get("player_client") == [
-                    "web",
-                    "android",
-                ]:
+                if extractor_args.get("youtube", {}).get("player_client") == [PLAYER_CLIENTS[0]]:
                     hooks = self.opts.get("progress_hooks") or []
                     for hook in hooks:
                         hook(
@@ -3409,10 +3396,7 @@ class TestDownloadVideo:
                 if self.opts.get("cookiesfrombrowser"):
                     raise yt_dlp.utils.DownloadError("Could not decrypt Chrome cookies")
                 extractor_args = self.opts.get("extractor_args") or {}
-                if extractor_args.get("youtube", {}).get("player_client") == [
-                    "web",
-                    "android",
-                ]:
+                if extractor_args.get("youtube", {}).get("player_client") == [PLAYER_CLIENTS[0]]:
                     hooks = self.opts.get("progress_hooks") or []
                     for hook in hooks:
                         hook(

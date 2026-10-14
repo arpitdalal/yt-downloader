@@ -33,6 +33,14 @@ INCOMPLETE_FILE_EXTENSIONS = (".part", ".ytdl")
 VIDEO_EXTENSIONS = ["mp4", "webm", "mkv", "m4a", "flv", "avi", "mov"]
 CACHE_KEY_VERSION = "hqv4"
 MAX_COOKIE_SOURCE_ATTEMPTS = 6
+PLAYER_CLIENTS = [
+    "tv_embedded",
+    "web_embedded",
+    "mweb",
+    "web_safari",
+    "android_vr",
+    "android",
+]
 YOUTUBE_COOKIE_AUTH_MARKERS = {
     "SID",
     "SAPISID",
@@ -1721,25 +1729,16 @@ class YouTubeDownloader:
                             ),
                         )
                     )
-        # android_vr still works without PO token for many videos; prefer over mweb.
-        attempts.append(
-            (
-                "android_vr",
-                self._compose_ydl_opts(
-                    base_opts,
-                    extractor_args={"youtube": {"player_client": ["android_vr"]}},
-                ),
+        for client in PLAYER_CLIENTS:
+            attempts.append(
+                (
+                    client,
+                    self._compose_ydl_opts(
+                        base_opts,
+                        extractor_args={"youtube": {"player_client": [client]}},
+                    ),
+                )
             )
-        )
-        attempts.append(
-            (
-                "android",
-                self._compose_ydl_opts(
-                    base_opts,
-                    extractor_args={"youtube": {"player_client": ["android"]}},
-                ),
-            )
-        )
 
         self._emit_debug_event(
             "auth_debug",
@@ -1767,23 +1766,7 @@ class YouTubeDownloader:
         )
 
         attempt_errors: list[str] = []
-        skip_anonymous_after_bot_check = False
-        skip_anonymous_except_recovery = False
         for attempt_name, ydl_opts in attempts:
-            has_cookies = bool(ydl_opts.get("cookiesfrombrowser") or ydl_opts.get("cookiefile"))
-            youtube_args = (ydl_opts.get("extractor_args") or {}).get("youtube") or {}
-            is_fetch_pot_attempt = "fetch_pot" in youtube_args
-            is_android_vr_attempt = attempt_name == "android_vr"
-            if skip_anonymous_after_bot_check and not has_cookies:
-                continue
-            if (
-                skip_anonymous_except_recovery
-                and not has_cookies
-                and not is_android_vr_attempt
-                and not is_fetch_pot_attempt
-            ):
-                continue
-
             self._emit_debug_event(
                 "auth_debug",
                 {
@@ -1837,13 +1820,6 @@ class YouTubeDownloader:
                     },
                 )
                 attempt_errors.append(f"{attempt_name}: {truncated}")
-                # Extra anonymous clients after an IP-level bot check just heat the IP.
-                # Keep android_vr + fetch_pot recovery; drop plain android/default duplicates.
-                if not has_cookies and self._is_youtube_bot_check_error(truncated):
-                    if is_android_vr_attempt:
-                        skip_anonymous_after_bot_check = True
-                    else:
-                        skip_anonymous_except_recovery = True
                 continue
             except (ValueError, KeyError, TypeError) as e:
                 print(f"Error extracting video info (DataError): {e}", file=sys.stderr)
@@ -2994,34 +2970,22 @@ class YouTubeDownloader:
                         }
                     )
 
-            # android_vr still works without PO token for many videos; prefer over mweb.
-            attempt_profiles.append(
-                {
-                    "name": "hq_android_vr",
-                    "selectors": self._build_format_selectors(quality),
-                    "cookiesfrombrowser": None,
-                    "fetch_pot": False,
-                    "extractor_args": {"youtube": {"player_client": ["android_vr"]}},
-                }
-            )
-
-            attempt_profiles.append(
-                {
-                    "name": "restricted_progressive",
-                    "selectors": self._build_restricted_format_selectors(),
-                    "cookiesfrombrowser": None,
-                    "fetch_pot": False,
-                    "extractor_args": {"youtube": {"player_client": ["web", "android"]}},
-                }
-            )
+            for client in PLAYER_CLIENTS:
+                attempt_profiles.append(
+                    {
+                        "name": f"hq_{client}",
+                        "selectors": self._build_format_selectors(quality),
+                        "cookiesfrombrowser": None,
+                        "fetch_pot": False,
+                        "extractor_args": {"youtube": {"player_client": [client]}},
+                    }
+                )
 
             last_error = None
             download_succeeded = False
 
             # Check if SSL certificate verification should be disabled
             skip_cert_check = os.environ.get("YT_DLP_SKIP_CERT_CHECK", "false").lower() == "true"
-            skip_anonymous_after_bot_check = False
-            skip_anonymous_except_recovery = False
 
             for profile in attempt_profiles:
                 format_selectors = profile["selectors"]
@@ -3030,17 +2994,6 @@ class YouTubeDownloader:
                 profile_fetch_pot = bool(profile.get("fetch_pot"))
                 profile_extractor_args = profile.get("extractor_args")
                 has_cookies = isinstance(profile_cookies, tuple)
-                is_android_vr_profile = profile_name == "hq_android_vr"
-
-                if skip_anonymous_after_bot_check and not has_cookies:
-                    continue
-                if (
-                    skip_anonymous_except_recovery
-                    and not has_cookies
-                    and not is_android_vr_profile
-                    and not profile_fetch_pot
-                ):
-                    continue
 
                 for format_selector in format_selectors:
                     progress_tracker.selected_format = None
@@ -3154,10 +3107,6 @@ class YouTubeDownloader:
                                 video_info=video_info,
                             )
                         if not has_cookies and self._is_youtube_bot_check_error(error_msg):
-                            if is_android_vr_profile:
-                                skip_anonymous_after_bot_check = True
-                            else:
-                                skip_anonymous_except_recovery = True
                             break
                         # Retry with another selector/profile. We intentionally do not
                         # raise here to avoid hard-failing on transient/content-specific
@@ -3261,8 +3210,9 @@ class YouTubeDownloader:
                 "video_height"
             ) or progress_tracker.selected_format.get("height")
         max_adaptive_height = format_caps.get("max_adaptive_height")
+        player_client_profiles = {f"hq_{client}" for client in PLAYER_CLIENTS}
         if (
-            successful_profile_name == "restricted_progressive"
+            successful_profile_name in player_client_profiles
             and isinstance(selected_height, int)
             and isinstance(max_adaptive_height, int)
             and max_adaptive_height >= 720
