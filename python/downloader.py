@@ -1082,23 +1082,79 @@ class YouTubeDownloader:
         if not browser_cookies_enabled:
             return [], None
 
-        for cookies_browser in self._browser_cookie_candidates():
-            candidate = self._cookiesfrombrowser_option(cookies_browser)
-            if candidate:
-                return (
-                    [
-                        {
-                            "id": f"legacy_{cookies_browser}",
-                            "browser": cookies_browser,
-                            "browserLabel": self._browser_label(cookies_browser),
-                            "profile": None,
-                            "profileLabel": None,
-                            "cookiesfrombrowser": candidate,
-                        }
-                    ],
-                    None,
-                )
-        return [], None
+        # When an explicit browser preference is supplied (env or manual tooling),
+        # honor only that browser and keep the historical single-source behavior.
+        preferred_browsers = [
+            token.strip().lower()
+            for token in re.split(r"[, ]+", os.environ.get("YT_DLP_COOKIES_BROWSER", "").strip())
+            if token.strip()
+        ]
+        if preferred_browsers:
+            for cookies_browser in preferred_browsers:
+                normalized = {
+                    "google-chrome": "chrome",
+                    "msedge": "edge",
+                }.get(cookies_browser, cookies_browser)
+                candidate = self._cookiesfrombrowser_option(normalized)
+                if candidate:
+                    return (
+                        [
+                            {
+                                "id": f"legacy_{normalized}",
+                                "browser": normalized,
+                                "browserLabel": self._browser_label(normalized),
+                                "profile": None,
+                                "profileLabel": None,
+                                "cookiesfrombrowser": candidate,
+                            }
+                        ],
+                        None,
+                    )
+            return [], None
+
+        # Auto-discover every reachable browser cookie profile instead of stopping at
+        # the first browser that exists on disk. The first available browser (often
+        # Arc) can carry cookies that still fail YouTube's bot check, while another
+        # installed browser (e.g. Chrome) holds working ones. Probing each profile
+        # for authenticated YouTube cookies lets us try all viable sources.
+        discovered = self._discover_cookie_sources()
+        resolved: list[dict] = []
+        dedupe: set[tuple[object, ...]] = set()
+        source_errors: list[str] = []
+        for raw_source in discovered:
+            if len(resolved) >= MAX_COOKIE_SOURCE_ATTEMPTS:
+                break
+            source = self._probe_cookie_source(dict(raw_source))
+            if not source.get("available"):
+                source_errors.append(f"{source.get('browserLabel') or source.get('browser')}: unavailable profile")
+                continue
+            if not (source.get("hasYoutubeCookies") and source.get("hasYoutubeAuthCookies")):
+                continue
+            cookiesfrombrowser = self._cookiesfrombrowser_option_for_source(source)
+            if not cookiesfrombrowser:
+                source_errors.append(f"{source.get('browserLabel') or source.get('browser')}: unavailable profile")
+                continue
+            if cookiesfrombrowser in dedupe:
+                continue
+            dedupe.add(cookiesfrombrowser)
+            resolved.append(
+                {
+                    "id": source.get("id"),
+                    "browser": source.get("browser"),
+                    "browserLabel": source.get("browserLabel"),
+                    "profile": source.get("profile"),
+                    "profileLabel": source.get("profileLabel"),
+                    "cookiesfrombrowser": cookiesfrombrowser,
+                }
+            )
+
+        if resolved:
+            return resolved, None
+        return (
+            [],
+            "No authenticated browser cookie source available"
+            + (f" ({'; '.join(source_errors[:2])})" if source_errors else ""),
+        )
 
     @staticmethod
     def _truncate_error_message(message: str, limit: int = 220) -> str:
