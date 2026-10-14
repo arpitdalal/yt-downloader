@@ -619,10 +619,15 @@ class YouTubeDownloader:
             except OSError:
                 cookie_files = []
             if cookie_files:
+                # Browsers such as Opera keep cookies under <root>/Network/Cookies
+                # while their Local State key lives at <root>. Passing the cookie
+                # file's parent makes yt-dlp search for the key in the wrong place,
+                # so use the user-data root whenever cookies were found nested.
+                profile = str(user_data_dir)
                 return [
                     {
                         "browser": browser,
-                        "profile": str(cookie_files[0].parent),
+                        "profile": profile,
                         "profileLabel": "Default",
                         "priority": priority_base,
                     }
@@ -631,14 +636,14 @@ class YouTubeDownloader:
 
         candidates: list[tuple[Path, str]] = []
         default_dir = user_data_dir / "Default"
-        if (default_dir / "Cookies").is_file():
+        if (default_dir / "Cookies").is_file() or (default_dir / "Network" / "Cookies").is_file():
             candidates.append((default_dir, "Default"))
         try:
             for entry in user_data_dir.iterdir():
                 if not entry.is_dir():
                     continue
                 if entry.name == "Default" or entry.name.startswith("Profile "):
-                    if (entry / "Cookies").is_file():
+                    if (entry / "Cookies").is_file() or (entry / "Network" / "Cookies").is_file():
                         candidates.append((entry, entry.name))
         except OSError:
             return []
@@ -1040,6 +1045,8 @@ class YouTubeDownloader:
         return None
 
     def _resolve_cookie_attempt_sources(self) -> tuple[list[dict], str | None]:
+        if getattr(self, "_cookie_attempt_sources_cache", None) is not None:
+            return self._cookie_attempt_sources_cache  # type: ignore[return-value]
         raw_explicit_sources = os.environ.get("YT_DLP_COOKIE_SOURCES_JSON")
         has_explicit_sources = raw_explicit_sources is not None and bool(raw_explicit_sources.strip())
         explicit_sources = self._cookie_sources_from_env_json()
@@ -1148,13 +1155,17 @@ class YouTubeDownloader:
                 }
             )
 
-        if resolved:
-            return resolved, None
-        return (
-            [],
-            "No authenticated browser cookie source available"
-            + (f" ({'; '.join(source_errors[:2])})" if source_errors else ""),
+        result = (
+            (resolved, None)
+            if resolved
+            else (
+                [],
+                "No authenticated browser cookie source available"
+                + (f" ({'; '.join(source_errors[:2])})" if source_errors else ""),
+            )
         )
+        self._cookie_attempt_sources_cache = result
+        return result
 
     @staticmethod
     def _truncate_error_message(message: str, limit: int = 220) -> str:
