@@ -3204,15 +3204,14 @@ class YouTubeDownloader:
                 video_info=video_info,
             )
 
-        selected_height = None
-        if progress_tracker.selected_format:
-            selected_height = progress_tracker.selected_format.get(
-                "video_height"
-            ) or progress_tracker.selected_format.get("height")
+        selected_format = progress_tracker.selected_format or {}
+        selected_height = selected_format.get("video_height") or selected_format.get("height")
+        is_progressive = selected_format.get("video_height") is None
         max_adaptive_height = format_caps.get("max_adaptive_height")
         player_client_profiles = {f"hq_{client}" for client in PLAYER_CLIENTS}
         if (
             successful_profile_name in player_client_profiles
+            and is_progressive
             and isinstance(selected_height, int)
             and isinstance(max_adaptive_height, int)
             and max_adaptive_height >= 720
