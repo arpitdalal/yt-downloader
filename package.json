@@ -48,25 +48,25 @@
 		"@tauri-apps/plugin-opener": "^2.5.4",
 		"@tauri-apps/plugin-process": "^2.3.1",
 		"@tauri-apps/plugin-updater": "^2.10.1",
-		"react": "^19.2.8",
-		"react-dom": "^19.2.8"
+		"react": "^19.3.1",
+		"react-dom": "^19.3.1"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.8",
 		"@tailwindcss/vite": "^4.3.3",
 		"@tauri-apps/cli": "^2.11.4",
 		"@types/node": "^26.2.0",
-		"@types/react": "^19.2.18",
-		"@types/react-dom": "^19.2.4",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
 		"@vitejs/plugin-react": "^4.7.0",
 		"cross-env": "^10.1.0",
 		"lefthook": "^2.1.10",
 		"npm-run-all2": "^9.0.3",
 		"tailwindcss": "^4.3.3",
 		"typescript": "^5.9.3",
-		"vite": "^6.4.3",
+		"vite": "^6.4.5",
 		"vite-tsconfig-paths": "^5.1.4",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.12"
 	},
 	"packageManager": "pnpm@11.21.0+sha512.521705bce689924eac72f5a3587122f362689ef6571e55ba80076fd637c11132ecffada26fad4ea79c485bfddbfd3d5a2a5b05805a77e893de71ec8a6cca3bb1"
 }
